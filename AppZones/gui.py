@@ -138,6 +138,10 @@ class PreviewWidget(QWidget):
         px = (w - pw) // 2
         py = (h - ph) // 2
 
+        # Draw the target display resolution string at the top left of the widget
+        painter.setPen(QColor("#a1a1aa"))
+        painter.drawText(10, 20, f"Target Display: {sw}x{sh} px")
+
         painter.setBrush(QColor("#000000"))
         painter.setPen(QPen(QColor("#3f3f46"), 4))
         painter.drawRoundedRect(px - 4, py - 4, pw + 8, ph + 8, 8, 8)
@@ -166,7 +170,12 @@ class PreviewWidget(QWidget):
             
             painter.setPen(QColor("#ffffff"))
             title = z.get('window_title', '')
-            painter.drawText(zx, zy, zw, zh, Qt.AlignmentFlag.AlignCenter, title)
+            
+            # Show exact pixel dimensions
+            real_w, real_h = int(rect['width']), int(rect['height'])
+            display_text = f"{title}\n{real_w}x{real_h} px"
+            
+            painter.drawText(zx, zy, zw, zh, Qt.AlignmentFlag.AlignCenter, display_text)
 
 class ZoneRow(QFrame):
     def __init__(self, parent, delete_callback, change_callback, initial_data=None):

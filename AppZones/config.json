@@ -1,0 +1,40 @@
+{
+  "zones": [
+    {
+      "window_title": "Picture in picture",
+      "pos": "Bottom-Left",
+      "stat": "Height (%)",
+      "val": "16:9",
+      "rect": {
+        "x": 0,
+        "y": 540,
+        "width": 1344,
+        "height": 540
+      }
+    },
+    {
+      "window_title": "Google Chrome",
+      "pos": "Top-Left",
+      "stat": "Height (px)",
+      "val": "432",
+      "rect": {
+        "x": 0,
+        "y": 0,
+        "width": 1344,
+        "height": 432
+      }
+    },
+    {
+      "window_title": "Visual Studio Code",
+      "pos": "Right",
+      "stat": "Width (%)",
+      "val": "30",
+      "rect": {
+        "x": 1344,
+        "y": 0,
+        "width": 576,
+        "height": 1080
+      }
+    }
+  ]
+}

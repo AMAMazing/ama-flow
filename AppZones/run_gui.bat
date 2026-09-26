@@ -1,0 +1,3 @@
+@echo off
+echo Launching AppZones GUI Control Panel...
+python gui.py

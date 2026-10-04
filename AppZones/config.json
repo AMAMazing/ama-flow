@@ -1,40 +1,81 @@
 {
-  "zones": [
-    {
-      "window_title": "Picture in picture",
-      "pos": "Bottom-Left",
-      "stat": "Height (%)",
-      "val": "16:9",
-      "rect": {
-        "x": 0,
-        "y": 540,
-        "width": 1344,
-        "height": 540
+  "active_preset": "L - Low PiP",
+  "presets": {
+    "Default": [
+      {
+        "window_title": "Picture in picture",
+        "pos": "Bottom-Left",
+        "stat": "Height (%)",
+        "val": "16:9",
+        "rect": {
+          "x": 0,
+          "y": 540,
+          "width": 1344,
+          "height": 540
+        }
+      },
+      {
+        "window_title": "Google Chrome",
+        "pos": "Top-Left",
+        "stat": "Height (px)",
+        "val": "432",
+        "rect": {
+          "x": 0,
+          "y": 0,
+          "width": 1344,
+          "height": 432
+        }
+      },
+      {
+        "window_title": "Visual Studio Code",
+        "pos": "Right",
+        "stat": "Width (%)",
+        "val": "30",
+        "rect": {
+          "x": 1344,
+          "y": 0,
+          "width": 576,
+          "height": 1080
+        }
       }
-    },
-    {
-      "window_title": "Google Chrome",
-      "pos": "Top-Left",
-      "stat": "Height (px)",
-      "val": "432",
-      "rect": {
-        "x": 0,
-        "y": 0,
-        "width": 1344,
-        "height": 432
+    ],
+    "L - Low PiP": [
+      {
+        "window_title": "MYAEW",
+        "pos": "Bottom-Left",
+        "stat": "Aspect Ratio",
+        "val": "16:9",
+        "rect": {
+          "x": 0,
+          "y": 432,
+          "width": 1152,
+          "height": 648
+        }
+      },
+      {
+        "window_title": "Google Chrome",
+        "pos": "Top-Left",
+        "stat": "Height (px)",
+        "val": "432",
+        "rect": {
+          "x": 0,
+          "y": 0,
+          "width": 1152,
+          "height": 432
+        }
+      },
+      {
+        "window_title": "Visual Studio Code",
+        "pos": "Right",
+        "stat": "Fill (Any)",
+        "val": "30",
+        "rect": {
+          "x": 1152,
+          "y": 0,
+          "width": 768,
+          "height": 1080
+        }
       }
-    },
-    {
-      "window_title": "Visual Studio Code",
-      "pos": "Right",
-      "stat": "Width (%)",
-      "val": "30",
-      "rect": {
-        "x": 1344,
-        "y": 0,
-        "width": 576,
-        "height": 1080
-      }
-    }
-  ]
+    ]
+  }
 }

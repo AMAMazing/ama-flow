@@ -4,7 +4,8 @@ import os
 import subprocess
 import win32gui
 from PyQt6.QtWidgets import (QApplication, QMainWindow, QWidget, QVBoxLayout, QHBoxLayout,
-                             QPushButton, QLabel, QComboBox, QLineEdit, QScrollArea, QFrame, QDialog, QListWidget)
+                             QPushButton, QLabel, QComboBox, QLineEdit, QScrollArea, QFrame, QDialog, QListWidget,
+                             QInputDialog, QMessageBox)
 from PyQt6.QtCore import Qt
 from PyQt6.QtGui import QPainter, QColor, QPen
 
@@ -206,6 +207,7 @@ class ZoneRow(QFrame):
         self.pos_combo = NoWheelComboBox()
         self.pos_combo.addItems(["Left", "Right", "Top", "Bottom", "Top-Left", "Bottom-Left", "Top-Right", "Bottom-Right", "Fill Space"])
         self.pos_combo.setMinimumWidth(150)
+        self.pos_combo.currentTextChanged.connect(self.on_pos_changed)
         
         self.rule_combo = NoWheelComboBox()
         self.rule_combo.addItems(["Fill (Any)", "Aspect Ratio", "Width (px)", "Height (px)", "Width (%)", "Height (%)"])
@@ -232,12 +234,16 @@ class ZoneRow(QFrame):
             self.rule_combo.setCurrentText(initial_data.get("stat", "Fill (Any)"))
             self.val_input.setText(initial_data.get("val", ""))
             
-        self.val_input.setVisible(self.rule_combo.currentText() != "Fill (Any)")
+        self.update_visibility()
         self._initialized = True
 
         self.app_match.textChanged.connect(lambda _: self.trigger_change())
         self.pos_combo.currentTextChanged.connect(lambda _: self.trigger_change())
         self.val_input.textChanged.connect(lambda _: self.trigger_change())
+
+    def update_visibility(self):
+        is_fill = (self.pos_combo.currentText() == "Fill Space" or self.rule_combo.currentText() == "Fill (Any)")
+        self.val_input.setVisible(not is_fill)
 
     def trigger_change(self):
         if hasattr(self, '_initialized') and self._initialized:
@@ -248,13 +254,16 @@ class ZoneRow(QFrame):
         if dialog.exec():
             selected = dialog.get_selected()
             if selected:
-                # Grab the main application name instead of specific tab
                 title = selected.split(" - ")[-1]
                 self.app_match.setText(title)
                 self.trigger_change()
 
+    def on_pos_changed(self, text):
+        self.update_visibility()
+        self.trigger_change()
+
     def on_rule_changed(self, text):
-        self.val_input.setVisible(text != "Fill (Any)")
+        self.update_visibility()
         self.trigger_change()
 
     def get_data(self):
@@ -271,7 +280,10 @@ class MainWindow(QMainWindow):
         self.setWindowTitle("AppZones - Minimalist Auto-Layout")
         self.resize(800, 800)
         self.setStyleSheet(STYLESHEET)
+        
         self.rows = []
+        self.presets = {}
+        self.active_preset = "Default"
         
         self.init_ui()
         self.load_config()
@@ -289,6 +301,25 @@ class MainWindow(QMainWindow):
         header.addWidget(title)
         header.addWidget(sub)
         main_layout.addLayout(header)
+        
+        # PRESETS BAR
+        preset_layout = QHBoxLayout()
+        preset_layout.addWidget(QLabel("Preset:"))
+        
+        self.preset_combo = QComboBox()
+        self.preset_combo.currentTextChanged.connect(self.on_preset_changed)
+        preset_layout.addWidget(self.preset_combo, 1)
+        
+        btn_save = QPushButton("Save As...")
+        btn_save.clicked.connect(self.save_preset_as)
+        preset_layout.addWidget(btn_save)
+        
+        btn_delete = QPushButton("Delete")
+        btn_delete.setObjectName("danger")
+        btn_delete.clicked.connect(self.delete_preset)
+        preset_layout.addWidget(btn_delete)
+        
+        main_layout.addLayout(preset_layout)
         
         self.preview = PreviewWidget()
         main_layout.addWidget(self.preview)
@@ -318,6 +349,106 @@ class MainWindow(QMainWindow):
         footer.addWidget(btn_apply)
         main_layout.addLayout(footer)
 
+    def load_config(self):
+        loaded = False
+        self.presets = {"Default": []}
+        self.active_preset = "Default"
+        
+        if os.path.exists(CONFIG_PATH):
+            try:
+                with open(CONFIG_PATH, "r", encoding="utf-8") as f:
+                    config = json.load(f)
+                    if "presets" in config:
+                        self.presets = config["presets"]
+                        self.active_preset = config.get("active_preset", "Default")
+                        loaded = True
+                    elif "zones" in config:
+                        self.presets["Default"] = config["zones"]
+                        loaded = True
+            except: pass
+            
+        if not loaded or not self.presets.get(self.active_preset):
+            self.presets["Default"] = [
+                {"window_title": "Code", "pos": "Fill Space", "stat": "Fill (Any)", "val": ""},
+                {"window_title": "Netflix", "pos": "Bottom-Left", "stat": "Aspect Ratio", "val": "16:9"},
+                {"window_title": "Chrome", "pos": "Top-Left", "stat": "Height (px)", "val": "432"}
+            ]
+            self.active_preset = "Default"
+            
+        self.populate_presets()
+
+    def populate_presets(self):
+        self.preset_combo.blockSignals(True)
+        self.preset_combo.clear()
+        self.preset_combo.addItems(list(self.presets.keys()))
+        if self.active_preset in self.presets:
+            self.preset_combo.setCurrentText(self.active_preset)
+        self.preset_combo.blockSignals(False)
+        self.load_preset(self.active_preset)
+
+    def load_preset(self, name):
+        for row in self.rows[:]:
+            self.rows_layout.removeWidget(row)
+            row.deleteLater()
+        self.rows.clear()
+        
+        zones = self.presets.get(name, [])
+        for z in zones:
+            self.add_row(z)
+            
+        self.update_preview()
+
+    def on_preset_changed(self, name):
+        if name and name in self.presets:
+            self.active_preset = name
+            self.load_preset(name)
+
+    def _get_current_zones_with_rects(self):
+        zones_data = []
+        for row in self.rows:
+            data = row.get_data()
+            if data["window_title"]:
+                zones_data.append(data)
+                
+        screen = self.screen().geometry()
+        return self.calculate_rects(zones_data, screen.width(), screen.height())
+
+    def save_preset_as(self):
+        name, ok = QInputDialog.getText(self, "Save Preset", "Preset Name:", text=self.active_preset)
+        if ok and name.strip():
+            name = name.strip()
+            self.active_preset = name
+            self.presets[name] = self._get_current_zones_with_rects()
+            
+            if self.preset_combo.findText(name) == -1:
+                self.preset_combo.blockSignals(True)
+                self.preset_combo.addItem(name)
+                self.preset_combo.blockSignals(False)
+                
+            self.preset_combo.blockSignals(True)
+            self.preset_combo.setCurrentText(name)
+            self.preset_combo.blockSignals(False)
+            
+            self.save_to_disk()
+
+    def delete_preset(self):
+        if len(self.presets) <= 1:
+            QMessageBox.warning(self, "Cannot Delete", "You must have at least one preset.")
+            return
+            
+        reply = QMessageBox.question(self, "Delete Preset", f"Are you sure you want to delete '{self.active_preset}'?",
+                                     QMessageBox.StandardButton.Yes | QMessageBox.StandardButton.No)
+        
+        if reply == QMessageBox.StandardButton.Yes:
+            del self.presets[self.active_preset]
+            self.active_preset = list(self.presets.keys())[0]
+            self.populate_presets()
+            self.save_to_disk()
+
+    def save_to_disk(self):
+        with open(CONFIG_PATH, "w", encoding="utf-8") as f:
+            json.dump({"active_preset": self.active_preset, "presets": self.presets}, f, indent=2)
+
     def add_row(self, data=None):
         row = ZoneRow(self.scroll_content, self.delete_row, self.update_preview, data)
         self.rows.append(row)
@@ -325,27 +456,10 @@ class MainWindow(QMainWindow):
         self.update_preview()
 
     def delete_row(self, row):
-        self.rows.remove(row)
-        row.deleteLater()
-        self.update_preview()
-
-    def load_config(self):
-        loaded = False
-        if os.path.exists(CONFIG_PATH):
-            try:
-                with open(CONFIG_PATH, "r") as f:
-                    config = json.load(f)
-                    for z in config.get("zones", []):
-                        self.add_row(z)
-                        loaded = True
-            except: pass
-            
-        if not loaded:
-            self.add_row({"window_title": "Code", "pos": "Right", "stat": "Width (%)", "val": "40"})
-            self.add_row({"window_title": "Netflix", "pos": "Bottom-Left", "stat": "Aspect Ratio", "val": "16:9"})
-            self.add_row({"window_title": "Chrome", "pos": "Fill Space", "stat": "Fill (Any)", "val": ""})
-            
-        self.update_preview()
+        if row in self.rows:
+            self.rows.remove(row)
+            row.deleteLater()
+            self.update_preview()
 
     def update_preview(self):
         zones_data = []
@@ -373,104 +487,151 @@ class MainWindow(QMainWindow):
             except: pass
             return 0
 
-        # Pass 1: Sides
+        def parse_ar(val):
+            try:
+                v = val.replace(':', '/')
+                num, den = map(float, v.split('/'))
+                return num / den
+            except:
+                return 16.0 / 9.0
+
+        def is_fill(z):
+            return z.get('pos') == "Fill Space" or z.get('stat') == "Fill (Any)"
+
+        # Pass 1: Explicit Side Snaps (Left, Right, Top, Bottom)
         for z in zones:
             pos = z.get('pos', '')
-            stat = z.get('stat', '')
-            if pos == "Fill Space" or stat == "Fill (Any)": continue
+            if is_fill(z) or pos in ["Top-Left", "Bottom-Left", "Top-Right", "Bottom-Right"]:
+                continue
             
-            if pos == "Right" or pos == "Left":
+            stat = z.get('stat', '')
+            if pos in ["Right", "Left"]:
                 if stat == "Aspect Ratio":
-                    try:
-                        val = z.get('val', '').replace(':', '/')
-                        num, den = map(float, val.split('/'))
-                        w = int(rem_h * num / den)
-                    except:
-                        w = int(rem_h * 16 / 9)
+                    w = int(rem_h * parse_ar(z.get('val', '')))
                 else:
                     w = get_val(z, rem_w, True) or (rem_w // 2)
                 
+                w = max(0, min(w, rem_w))
                 if pos == "Right":
                     z['rect'] = {"x": rem_x + rem_w - w, "y": rem_y, "width": w, "height": rem_h}
-                    rem_w = max(0, rem_w - w)
+                    rem_w -= w
                 else:
                     z['rect'] = {"x": rem_x, "y": rem_y, "width": w, "height": rem_h}
                     rem_x += w
-                    rem_w = max(0, rem_w - w)
+                    rem_w -= w
                     
-            elif pos == "Top" or pos == "Bottom":
+            elif pos in ["Top", "Bottom"]:
                 if stat == "Aspect Ratio":
-                    try:
-                        val = z.get('val', '').replace(':', '/')
-                        num, den = map(float, val.split('/'))
-                        h = int(rem_w * den / num)
-                    except:
-                        h = int(rem_w * 9 / 16)
+                    h = int(rem_w / parse_ar(z.get('val', '')))
                 else:
                     h = get_val(z, rem_h, False) or (rem_h // 2)
                     
+                h = max(0, min(h, rem_h))
                 if pos == "Top":
                     z['rect'] = {"x": rem_x, "y": rem_y, "width": rem_w, "height": h}
                     rem_y += h
-                    rem_h = max(0, rem_h - h)
+                    rem_h -= h
                 else:
                     z['rect'] = {"x": rem_x, "y": rem_y + rem_h - h, "width": rem_w, "height": h}
-                    rem_h = max(0, rem_h - h)
+                    rem_h -= h
 
-        # Pass 2: Corners
-        for z in zones:
-            pos = z.get('pos', '')
-            stat = z.get('stat', '')
-            if pos == "Fill Space" or stat == "Fill (Any)": continue
-            
-            if pos in ["Top-Left", "Bottom-Left", "Top-Right", "Bottom-Right"]:
-                w = rem_w
-                h = 0
-                val = z.get('val', '')
-                if stat == "Aspect Ratio":
-                    try:
-                        val = val.replace(':', '/')
-                        num, den = map(float, val.split('/'))
-                        h = int(w * den / num)
-                    except:
-                        h = int(w * 9 / 16)
+        # Pass 2: Smart Corner Columns (Left and Right Columns)
+        def solve_column(top_zone, bot_zone, col_x, total_h, total_w):
+            if not top_zone and not bot_zone:
+                return 0
+
+            # Determine heights and column width
+            top_h, bot_h, col_w = 0, 0, 0
+
+            if top_zone and bot_zone:
+                top_stat = top_zone.get('stat', '')
+                bot_stat = bot_zone.get('stat', '')
+
+                # Case: One specifies Height and the other specifies Aspect Ratio
+                if "Height" in top_stat and bot_stat == "Aspect Ratio":
+                    top_h = get_val(top_zone, total_h, False)
+                    top_h = max(0, min(top_h, total_h))
+                    bot_h = total_h - top_h
+                    ar = parse_ar(bot_zone.get('val', ''))
+                    col_w = int(bot_h * ar)
+                elif "Height" in bot_stat and top_stat == "Aspect Ratio":
+                    bot_h = get_val(bot_zone, total_h, False)
+                    bot_h = max(0, min(bot_h, total_h))
+                    top_h = total_h - bot_h
+                    ar = parse_ar(top_zone.get('val', ''))
+                    col_w = int(top_h * ar)
+                elif "Height" in top_stat and "Height" in bot_stat:
+                    top_h = get_val(top_zone, total_h, False)
+                    bot_h = get_val(bot_zone, total_h, False)
+                    col_w = max(get_val(top_zone, total_w, True), get_val(bot_zone, total_w, True)) or (total_w // 2)
+                elif top_stat == "Aspect Ratio" and bot_stat == "Aspect Ratio":
+                    top_h = total_h // 2
+                    bot_h = total_h - top_h
+                    ar_top = parse_ar(top_zone.get('val', ''))
+                    ar_bot = parse_ar(bot_zone.get('val', ''))
+                    col_w = max(int(top_h * ar_top), int(bot_h * ar_bot))
                 else:
-                    h = get_val(z, rem_h, False) or (rem_h // 2)
+                    top_h = get_val(top_zone, total_h, False) or (total_h // 2)
+                    bot_h = total_h - top_h
+                    col_w = max(get_val(top_zone, total_w, True), get_val(bot_zone, total_w, True)) or (total_w // 2)
+            elif top_zone:
+                top_stat = top_zone.get('stat', '')
+                if top_stat == "Aspect Ratio":
+                    top_h = total_h
+                    col_w = int(top_h * parse_ar(top_zone.get('val', '')))
+                else:
+                    top_h = get_val(top_zone, total_h, False) or total_h
+                    col_w = get_val(top_zone, total_w, True) or (total_w // 2)
+            elif bot_zone:
+                bot_stat = bot_zone.get('stat', '')
+                if bot_stat == "Aspect Ratio":
+                    bot_h = total_h
+                    col_w = int(bot_h * parse_ar(bot_zone.get('val', '')))
+                else:
+                    bot_h = get_val(bot_zone, total_h, False) or total_h
+                    col_w = get_val(bot_zone, total_w, True) or (total_w // 2)
 
-                if pos == "Bottom-Left":
-                    z['rect'] = {"x": rem_x, "y": rem_y + rem_h - h, "width": w, "height": h}
-                    rem_h = max(0, rem_h - h)
-                elif pos == "Bottom-Right":
-                    z['rect'] = {"x": rem_x + rem_w - w, "y": rem_y + rem_h - h, "width": w, "height": h}
-                    rem_h = max(0, rem_h - h)
-                elif pos == "Top-Left":
-                    z['rect'] = {"x": rem_x, "y": rem_y, "width": w, "height": h}
-                    rem_y += h
-                    rem_h = max(0, rem_h - h)
-                elif pos == "Top-Right":
-                    z['rect'] = {"x": rem_x + rem_w - w, "y": rem_y, "width": w, "height": h}
-                    rem_y += h
-                    rem_h = max(0, rem_h - h)
+            col_w = max(0, min(col_w, total_w))
 
-        # Pass 3: Fill
-        for z in zones:
-            if z.get('pos') == "Fill Space" or z.get('stat') == "Fill (Any)" or 'rect' not in z:
-                z['rect'] = {"x": rem_x, "y": rem_y, "width": rem_w, "height": rem_h}
+            if top_zone:
+                top_zone['rect'] = {"x": col_x, "y": rem_y, "width": col_w, "height": top_h}
+            if bot_zone:
+                bot_y = rem_y + (top_h if top_zone else (total_h - bot_h))
+                bot_zone['rect'] = {"x": col_x, "y": bot_y, "width": col_w, "height": bot_h}
+
+            return col_w
+
+        # Solve Left Column
+        tl_zone = next((z for z in zones if z.get('pos') == "Top-Left"), None)
+        bl_zone = next((z for z in zones if z.get('pos') == "Bottom-Left"), None)
+        left_w = solve_column(tl_zone, bl_zone, rem_x, rem_h, rem_w)
+        rem_x += left_w
+        rem_w -= left_w
+
+        # Solve Right Column
+        tr_zone = next((z for z in zones if z.get('pos') == "Top-Right"), None)
+        br_zone = next((z for z in zones if z.get('pos') == "Bottom-Right"), None)
+        right_x = rem_x + rem_w
+        right_w = solve_column(tr_zone, br_zone, right_x - min(rem_w, rem_w // 2), rem_h, rem_w)
+        if right_w > 0:
+            if tr_zone: tr_zone['rect']['x'] = rem_x + rem_w - right_w
+            if br_zone: br_zone['rect']['x'] = rem_x + rem_w - right_w
+            rem_w -= right_w
+
+        # Pass 3: Fill Remaining Space
+        fill_zones = [z for z in zones if 'rect' not in z or is_fill(z)]
+        if fill_zones:
+            n = len(fill_zones)
+            fill_w = rem_w // n
+            for i, z in enumerate(fill_zones):
+                fw = fill_w if i < n - 1 else (rem_w - i * fill_w)
+                z['rect'] = {"x": rem_x + i * fill_w, "y": rem_y, "width": max(0, fw), "height": rem_h}
 
         return zones
 
     def apply_layout(self):
-        zones_data = []
-        for row in self.rows:
-            data = row.get_data()
-            if data["window_title"]:
-                zones_data.append(data)
-            
-        screen = self.screen().geometry()
-        zones_data = self.calculate_rects(zones_data, screen.width(), screen.height())
-        
-        with open(CONFIG_PATH, "w", encoding="utf-8") as f:
-            json.dump({"zones": zones_data}, f, indent=2)
+        self.presets[self.active_preset] = self._get_current_zones_with_rects()
+        self.save_to_disk()
             
         try:
             subprocess.Popen([sys.executable, MAIN_SCRIPT], shell=False)

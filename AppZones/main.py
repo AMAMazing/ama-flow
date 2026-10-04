@@ -41,7 +41,14 @@ def main():
     config_path = os.path.join(os.path.dirname(__file__), "config.json")
     config = load_config(config_path)
     
-    for zone in config.get("zones", []):
+    # Support new preset schema while maintaining backwards compatibility
+    if "presets" in config and "active_preset" in config:
+        active = config["active_preset"]
+        zones = config["presets"].get(active, [])
+    else:
+        zones = config.get("zones", [])
+    
+    for zone in zones:
         title = zone.get("window_title", "")
         rect = zone.get("rect")
         

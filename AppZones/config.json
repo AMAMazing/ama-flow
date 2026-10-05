@@ -1,130 +1,55 @@
 {
-  "active_preset": "L - Equal Split",
-  "presets": {
-    "Default": [
-      {
-        "window_title": "Picture in picture",
-        "pos": "Bottom-Left",
-        "stat": "Height (%)",
-        "val": "16:9",
-        "rect": {
-          "x": 0,
-          "y": 540,
-          "width": 1344,
-          "height": 540
-        }
-      },
-      {
-        "window_title": "Google Chrome",
-        "pos": "Top-Left",
-        "stat": "Height (px)",
-        "val": "432",
-        "rect": {
-          "x": 0,
-          "y": 0,
-          "width": 1344,
-          "height": 432
-        }
-      },
-      {
-        "window_title": "Visual Studio Code",
-        "pos": "Right",
-        "stat": "Width (%)",
-        "val": "30",
-        "rect": {
-          "x": 1344,
-          "y": 0,
-          "width": 576,
-          "height": 1080
-        }
-      }
-    ],
-    "L - Low PiP": [
-      {
-        "window_title": "MYAEW",
-        "pos": "Bottom-Left",
-        "stat": "Aspect Ratio",
-        "val": "16:9",
-        "split_mode": "Maximize Size",
-        "rect": {
-          "x": 0,
-          "y": 432,
-          "width": 1152,
-          "height": 648
-        }
-      },
-      {
-        "window_title": "Google Chrome",
-        "pos": "Top-Left",
-        "stat": "Height (px)",
-        "val": "432",
-        "split_mode": "Maximize Size",
-        "rect": {
-          "x": 0,
-          "y": 0,
-          "width": 1152,
-          "height": 432
-        }
-      },
-      {
-        "window_title": "Visual Studio Code",
-        "pos": "Right",
-        "stat": "Fill (Any)",
-        "val": "",
-        "split_mode": "Maximize Size",
-        "rect": {
-          "x": 1152,
-          "y": 0,
-          "width": 768,
-          "height": 1080
-        }
-      }
-    ],
-    "L - Equal Split": [
-      {
-        "window_title": "MYAEW",
-        "pos": "Bottom-Left",
-        "stat": "Aspect Ratio",
-        "val": "16:9",
-        "split_mode": "Equal Sizes",
-        "rect": {
-          "x": 0,
-          "y": 540,
-          "width": 960,
-          "height": 540
-        }
-      },
-      {
-        "window_title": "Google Chrome",
-        "pos": "Top-Left",
-        "stat": "Height (px)",
-        "val": "432",
-        "split_mode": "Equal Sizes",
-        "rect": {
-          "x": 0,
-          "y": 0,
-          "width": 960,
-          "height": 540
-        }
-      },
-      {
-        "window_title": "Visual Studio Code",
-        "pos": "Right",
-        "stat": "Fill (Any)",
-        "val": "",
-        "split_mode": "Equal Sizes",
-        "rect": {
-          "x": 960,
-          "y": 0,
-          "width": 960,
-          "height": 1080
-        }
-      }
-    ]
+  "layout_settings": {
+    "vscode_side": "Right",
+    "chrome_sizing": "Equal Size",
+    "active_media_profile": "App (1.68:1)",
+    "media_profiles": {
+      "16:9 (PiP)": "16:9",
+      "4:3 (Classic)": "4:3",
+      "21:9 (Ultrawide)": "21:9",
+      "1:1 (Square)": "1:1",
+      "App (1.68:1)": "1.68:1"
+    }
   },
-  "preset_modes": {
-    "Default": "Equal Sizes",
-    "L - Low PiP": "Maximize Size",
-    "L - Equal Split": "Equal Sizes"
-  }
+  "zones": [
+    {
+      "window_title": "YouTube",
+      "role": "media",
+      "pos": "Bottom-Left",
+      "stat": "Aspect Ratio",
+      "val": "1.68:1",
+      "rect": {
+        "x": 0,
+        "y": 540,
+        "width": 907,
+        "height": 540
+      }
+    },
+    {
+      "window_title": "Google Chrome",
+      "role": "chrome",
+      "pos": "Top-Left",
+      "stat": "Height (px)",
+      "val": "432",
+      "rect": {
+        "x": 0,
+        "y": 0,
+        "width": 907,
+        "height": 540
+      }
+    },
+    {
+      "window_title": "Visual Studio Code",
+      "role": "vscode",
+      "pos": "Right",
+      "stat": "Fill (Any)",
+      "val": "",
+      "rect": {
+        "x": 907,
+        "y": 0,
+        "width": 1013,
+        "height": 1080
+      }
+    }
+  ]
 }

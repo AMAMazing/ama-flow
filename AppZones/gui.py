@@ -1,13 +1,14 @@
 import sys
 import json
 import os
+import math
 import subprocess
 import win32gui
 from PyQt6.QtWidgets import (QApplication, QMainWindow, QWidget, QVBoxLayout, QHBoxLayout,
                              QPushButton, QLabel, QComboBox, QLineEdit, QScrollArea, QFrame, QDialog, QListWidget,
-                             QInputDialog, QMessageBox, QGraphicsDropShadowEffect)
-from PyQt6.QtCore import Qt, QSize
-from PyQt6.QtGui import QPainter, QColor, QPen, QFont, QBrush
+                             QInputDialog, QMessageBox)
+from PyQt6.QtCore import Qt
+from PyQt6.QtGui import QPainter, QColor, QPen, QFont
 
 CONFIG_PATH = os.path.join(os.path.dirname(__file__), "config.json")
 MAIN_SCRIPT = os.path.join(os.path.dirname(__file__), "main.py")
@@ -48,7 +49,7 @@ QLabel {
     font-size: 13px;
 }
 QLabel#section_title {
-    font-size: 16px;
+    font-size: 15px;
     font-weight: 600;
     color: #ffffff;
     padding-bottom: 2px;
@@ -232,41 +233,92 @@ def get_open_windows():
     def callback(hwnd, _):
         if win32gui.IsWindowVisible(hwnd):
             title = win32gui.GetWindowText(hwnd)
-            if title: windows.append(title)
+            if title:
+                windows.append((title, hwnd))
         return True
-    try: win32gui.EnumWindows(callback, None)
-    except: pass
+    try:
+        win32gui.EnumWindows(callback, None)
+    except:
+        pass
     junk = ["Program Manager", "Settings", "Microsoft Text Input Application"]
-    return sorted([w for w in set(windows) if w not in junk])
+    seen = set()
+    cleaned = []
+    for title, hwnd in windows:
+        if title not in junk and title not in seen:
+            seen.add(title)
+            cleaned.append((title, hwnd))
+    return sorted(cleaned, key=lambda x: x[0].lower())
+
+def calculate_window_aspect_ratio(hwnd):
+    try:
+        rect = win32gui.GetWindowRect(hwnd)
+        w = rect[2] - rect[0]
+        h = rect[3] - rect[1]
+        if w <= 0 or h <= 0:
+            return None, 0, 0
+        common_ratios = [
+            (16, 9), (4, 3), (21, 9), (16, 10), (3, 2),
+            (1, 1), (9, 16), (3, 4), (18, 9), (32, 9)
+        ]
+        target_ratio = w / h
+        best_match = None
+        best_diff = float("inf")
+        for num, den in common_ratios:
+            diff = abs((num / den) - target_ratio)
+            if diff < best_diff and diff < 0.05:
+                best_diff = diff
+                best_match = f"{num}:{den}"
+        if best_match:
+            return best_match, w, h
+        divisor = math.gcd(w, h)
+        if divisor > 10:
+            sim_w = w // divisor
+            sim_h = h // divisor
+            if sim_w < 100 and sim_h < 100:
+                return f"{sim_w}:{sim_h}", w, h
+        return f"{round(target_ratio, 2)}:1", w, h
+    except:
+        return None, 0, 0
 
 class AppSelectDialog(QDialog):
-    def __init__(self, parent):
+    def __init__(self, parent, return_hwnd=False):
         super().__init__(parent)
+        self.return_hwnd = return_hwnd
+        self.selected_hwnd = None
         self.setWindowTitle("Select Open Application")
-        self.setMinimumSize(420, 480)
+        self.setMinimumSize(460, 480)
         layout = QVBoxLayout(self)
         layout.setContentsMargins(20, 20, 20, 20)
         layout.setSpacing(14)
 
-        lbl = QLabel("Choose a running window to assign to this zone:")
+        lbl = QLabel("Choose a running window:")
         lbl.setObjectName("subtitle")
         layout.addWidget(lbl)
 
         self.list = QListWidget()
-        for w in get_open_windows():
-            self.list.addItem(w)
+        self.window_items = get_open_windows()
+        for title, hwnd in self.window_items:
+            self.list.addItem(title)
         layout.addWidget(self.list)
 
         btn_box = QHBoxLayout()
         btn_box.addStretch()
         btn_cancel = QPushButton("Cancel")
         btn_cancel.clicked.connect(self.reject)
-        btn_select = QPushButton("Select Application")
+        btn_select = QPushButton("Select")
         btn_select.setObjectName("primary")
-        btn_select.clicked.connect(self.accept)
+        btn_select.clicked.connect(self.on_select)
         btn_box.addWidget(btn_cancel)
         btn_box.addWidget(btn_select)
         layout.addLayout(btn_box)
+
+    def on_select(self):
+        idx = self.list.currentRow()
+        if idx >= 0 and idx < len(self.window_items):
+            self.selected_hwnd = self.window_items[idx][1]
+            self.accept()
+        else:
+            self.reject()
 
     def get_selected(self):
         if self.list.currentItem():
@@ -301,7 +353,7 @@ class PreviewWidget(QWidget):
         px = (w - pw) // 2
         py = (h - ph) // 2
 
-        # Monitor Bezel (FancyZones style)
+        # Monitor Bezel
         painter.setBrush(QColor("#181818"))
         painter.setPen(QPen(QColor("#383838"), 1))
         painter.drawRoundedRect(px - 6, py - 6, pw + 12, ph + 12, 8, 8)
@@ -311,30 +363,27 @@ class PreviewWidget(QWidget):
         painter.setPen(Qt.PenStyle.NoPen)
         painter.drawRoundedRect(px, py, pw, ph, 4, 4)
 
-        # Palette: refined muted PowerToys-like tones
         palette = [
-            (QColor("#1e3a5f"), QColor("#3b82f6")),  # Blue
-            (QColor("#2d3748"), QColor("#818cf8")),  # Indigo/Slate
-            (QColor("#1e3f3b"), QColor("#10b981")),  # Teal
-            (QColor("#452e2e"), QColor("#f87171")),  # Rose
-            (QColor("#3f2d4f"), QColor("#c084fc")),  # Purple
-            (QColor("#423821"), QColor("#fbbf24")),  # Amber
+            (QColor("#1e3a5f"), QColor("#3b82f6")),
+            (QColor("#2d3748"), QColor("#818cf8")),
+            (QColor("#1e3f3b"), QColor("#10b981")),
+            (QColor("#452e2e"), QColor("#f87171")),
+            (QColor("#3f2d4f"), QColor("#c084fc")),
+            (QColor("#423821"), QColor("#fbbf24")),
         ]
 
-        # Draw Zones
         for i, z in enumerate(self.zones):
-            rect = z.get('rect')
+            rect = z.get("rect")
             if not rect:
                 continue
 
-            zx = px + int(rect['x'] * scale)
-            zy = py + int(rect['y'] * scale)
-            zw = int(rect['width'] * scale)
-            zh = int(rect['height'] * scale)
+            zx = px + int(rect["x"] * scale)
+            zy = py + int(rect["y"] * scale)
+            zw = int(rect["width"] * scale)
+            zh = int(rect["height"] * scale)
 
             fill_c, border_c = palette[i % len(palette)]
 
-            # Inset slightly for zone separation like FancyZones
             gap = 2
             rx = zx + gap
             ry = zy + gap
@@ -345,7 +394,7 @@ class PreviewWidget(QWidget):
             painter.setPen(QPen(border_c, 1.5))
             painter.drawRoundedRect(rx, ry, rw, rh, 4, 4)
 
-            # Zone number badge top-left
+            # Badge
             painter.setPen(Qt.PenStyle.NoPen)
             painter.setBrush(QColor(0, 0, 0, 140))
             painter.drawRoundedRect(rx + 6, ry + 6, 20, 18, 3, 3)
@@ -355,8 +404,8 @@ class PreviewWidget(QWidget):
             painter.drawText(rx + 6, ry + 6, 20, 18, Qt.AlignmentFlag.AlignCenter, str(i + 1))
 
             # Title and dimension text
-            title = z.get('window_title', '')
-            real_w, real_h = int(rect['width']), int(rect['height'])
+            title = z.get("window_title", "")
+            real_w, real_h = int(rect["width"]), int(rect["height"])
             display_text = f"{title}\n{real_w} × {real_h} px"
 
             font_body = QFont("Segoe UI", 9, QFont.Weight.DemiBold)
@@ -371,12 +420,12 @@ class ZoneRow(QFrame):
         self.delete_callback = delete_callback
         self.change_callback = change_callback
         self.index = index
+        self.role = (initial_data or {}).get("role", "")
 
         layout = QVBoxLayout(self)
         layout.setContentsMargins(14, 12, 14, 12)
         layout.setSpacing(8)
 
-        # Header Row: Zone Number Badge, App Name/Input, Pick App Button, Delete Button
         top_row = QHBoxLayout()
         top_row.setSpacing(10)
 
@@ -385,7 +434,7 @@ class ZoneRow(QFrame):
         top_row.addWidget(self.num_badge)
 
         self.app_match = QLineEdit()
-        self.app_match.setPlaceholderText("Window Title Substring (e.g. Chrome, Visual Studio Code)")
+        self.app_match.setPlaceholderText("Window Title Substring (e.g. Visual Studio Code, Chrome, MYAEW)")
         top_row.addWidget(self.app_match, 1)
 
         self.btn_select = QPushButton("Pick App...")
@@ -402,7 +451,6 @@ class ZoneRow(QFrame):
 
         layout.addLayout(top_row)
 
-        # Rules / Placement Controls Row
         bot_row = QHBoxLayout()
         bot_row.setSpacing(10)
 
@@ -448,7 +496,7 @@ class ZoneRow(QFrame):
             self.app_match.setText(initial_data.get("window_title", ""))
             self.pos_combo.setCurrentText(initial_data.get("pos", "Left"))
             self.rule_combo.setCurrentText(initial_data.get("stat", "Fill (Any)"))
-            self.val_input.setText(initial_data.get("val", ""))
+            self.val_input.setText(str(initial_data.get("val", "")))
 
         self.update_visibility()
         self._initialized = True
@@ -467,7 +515,7 @@ class ZoneRow(QFrame):
         self.val_input.setVisible(not is_fill)
 
     def trigger_change(self):
-        if hasattr(self, '_initialized') and self._initialized:
+        if hasattr(self, "_initialized") and self._initialized:
             self.change_callback()
 
     def select_app(self):
@@ -490,6 +538,7 @@ class ZoneRow(QFrame):
     def get_data(self):
         return {
             "window_title": self.app_match.text().strip(),
+            "role": self.role,
             "pos": self.pos_combo.currentText(),
             "stat": self.rule_combo.currentText(),
             "val": self.val_input.text().strip()
@@ -499,13 +548,23 @@ class MainWindow(QMainWindow):
     def __init__(self):
         super().__init__()
         self.setWindowTitle("AppZones - FancyZones Auto-Layout")
-        self.resize(880, 840)
+        self.resize(920, 880)
         self.setStyleSheet(STYLESHEET)
 
         self.rows = []
-        self.presets = {}
-        self.preset_modes = {}
-        self.active_preset = "Default"
+        self.media_profiles = {
+            "16:9 (PiP)": "16:9",
+            "4:3 (Classic)": "4:3",
+            "21:9 (Ultrawide)": "21:9",
+            "1:1 (Square)": "1:1",
+            "MYAEW": "16:9"
+        }
+        self.layout_settings = {
+            "vscode_side": "Right",
+            "chrome_sizing": "Equal Size",
+            "active_media_profile": "16:9 (PiP)"
+        }
+        self._updating_controls = False
 
         self.init_ui()
         self.load_config()
@@ -518,9 +577,8 @@ class MainWindow(QMainWindow):
         main_layout.setContentsMargins(24, 20, 24, 20)
         main_layout.setSpacing(16)
 
-        # Header Area with PowerToys-style Monitor Display Card
+        # Header Area
         header = QHBoxLayout()
-        
         titles_box = QVBoxLayout()
         titles_box.setSpacing(2)
         title = QLabel("AppZones")
@@ -530,20 +588,18 @@ class MainWindow(QMainWindow):
         titles_box.addWidget(title)
         titles_box.addWidget(sub)
         header.addLayout(titles_box)
-
         header.addStretch()
 
-        # Monitor Card (FancyZones style)
         self.monitor_card = QFrame()
         self.monitor_card.setObjectName("monitor_card")
         mon_layout = QVBoxLayout(self.monitor_card)
         mon_layout.setContentsMargins(12, 6, 12, 6)
         mon_layout.setSpacing(2)
-        
+
         self.mon_num_label = QLabel("Display 1")
         self.mon_num_label.setFont(QFont("Segoe UI", 10, QFont.Weight.DemiBold))
         self.mon_num_label.setAlignment(Qt.AlignmentFlag.AlignCenter)
-        
+
         screen = self.screen().geometry()
         self.mon_res_label = QLabel(f"{screen.width()} × {screen.height()}")
         self.mon_res_label.setObjectName("subtitle")
@@ -552,46 +608,74 @@ class MainWindow(QMainWindow):
         mon_layout.addWidget(self.mon_num_label)
         mon_layout.addWidget(self.mon_res_label)
         header.addWidget(self.monitor_card)
-
         main_layout.addLayout(header)
 
-        # Presets Bar Card
-        preset_card = QFrame()
-        preset_card.setObjectName("card")
-        preset_layout = QHBoxLayout(preset_card)
-        preset_layout.setContentsMargins(14, 10, 14, 10)
-        preset_layout.setSpacing(12)
+        # Dynamic Layout Control Bar Card
+        control_card = QFrame()
+        control_card.setObjectName("card")
+        ctrl_main_layout = QVBoxLayout(control_card)
+        ctrl_main_layout.setContentsMargins(16, 14, 16, 14)
+        ctrl_main_layout.setSpacing(12)
 
-        lbl_preset = QLabel("Preset:")
-        lbl_preset.setObjectName("field_label")
-        preset_layout.addWidget(lbl_preset)
+        # Row 1: VS Code Placement & Chrome Sizing
+        row1 = QHBoxLayout()
+        row1.setSpacing(14)
 
-        self.preset_combo = QComboBox()
-        self.preset_combo.setMinimumWidth(160)
-        self.preset_combo.currentTextChanged.connect(self.on_preset_changed)
-        preset_layout.addWidget(self.preset_combo, 1)
+        lbl_side = QLabel("VS Code Side:")
+        lbl_side.setObjectName("field_label")
+        row1.addWidget(lbl_side)
 
-        lbl_split = QLabel("Corner Sizing:")
-        lbl_split.setObjectName("field_label")
-        preset_layout.addWidget(lbl_split)
+        self.vscode_side_combo = NoWheelComboBox()
+        self.vscode_side_combo.addItems(["Right", "Left"])
+        self.vscode_side_combo.setToolTip("Set VS Code to Left or Right side. Chrome and Media will adapt on the opposite side.")
+        self.vscode_side_combo.currentTextChanged.connect(self.on_vscode_side_changed)
+        row1.addWidget(self.vscode_side_combo)
 
-        self.split_combo = NoWheelComboBox()
-        self.split_combo.addItems(["Maximize Size", "Equal Sizes"])
-        self.split_combo.setToolTip("Maximize Size: Aspect Ratio app gets max possible space.\nEqual Sizes: Both apps split column height equally.")
-        self.split_combo.currentTextChanged.connect(lambda _: self.on_split_mode_changed())
-        preset_layout.addWidget(self.split_combo)
+        lbl_chrome = QLabel("Google Chrome Sizing:")
+        lbl_chrome.setObjectName("field_label")
+        row1.addWidget(lbl_chrome)
 
-        btn_save = QPushButton("Save As...")
-        btn_save.setObjectName("secondary_action")
-        btn_save.clicked.connect(self.save_preset_as)
-        preset_layout.addWidget(btn_save)
+        self.chrome_sizing_combo = NoWheelComboBox()
+        self.chrome_sizing_combo.addItems(["Equal Size", "Minimum Size (432px)"])
+        self.chrome_sizing_combo.setToolTip("Equal Size: Chrome and Media split column height equally.\nMinimum Size: Chrome is kept at 432px, Media expands.")
+        self.chrome_sizing_combo.currentTextChanged.connect(self.on_chrome_sizing_changed)
+        row1.addWidget(self.chrome_sizing_combo)
+        row1.addStretch()
+        ctrl_main_layout.addLayout(row1)
 
-        btn_delete = QPushButton("Delete")
-        btn_delete.setObjectName("danger")
-        btn_delete.clicked.connect(self.delete_preset)
-        preset_layout.addWidget(btn_delete)
+        # Row 2: Media Aspect Ratio & Capture
+        row2 = QHBoxLayout()
+        row2.setSpacing(10)
 
-        main_layout.addWidget(preset_card)
+        lbl_media_ar = QLabel("Media Aspect Ratio:")
+        lbl_media_ar.setObjectName("field_label")
+        row2.addWidget(lbl_media_ar)
+
+        self.media_ar_combo = NoWheelComboBox()
+        self.media_ar_combo.setMinimumWidth(160)
+        self.media_ar_combo.currentTextChanged.connect(self.on_media_ar_profile_changed)
+        row2.addWidget(self.media_ar_combo)
+
+        btn_detect_ar = QPushButton("📷 Save Current Media AR...")
+        btn_detect_ar.setObjectName("secondary_action")
+        btn_detect_ar.setToolTip("Inspect a running media window and automatically calculate and save its aspect ratio")
+        btn_detect_ar.clicked.connect(self.detect_and_save_media_ar)
+        row2.addWidget(btn_detect_ar)
+
+        btn_add_ar = QPushButton("+ Custom AR")
+        btn_add_ar.setObjectName("secondary_action")
+        btn_add_ar.clicked.connect(self.add_custom_ar)
+        row2.addWidget(btn_add_ar)
+
+        btn_del_ar = QPushButton("Delete AR")
+        btn_del_ar.setObjectName("danger")
+        btn_del_ar.clicked.connect(self.delete_current_ar)
+        row2.addWidget(btn_del_ar)
+
+        row2.addStretch()
+        ctrl_main_layout.addLayout(row2)
+
+        main_layout.addWidget(control_card)
 
         # Section: Layout Preview
         lbl_preview = QLabel("Layout Preview")
@@ -618,7 +702,7 @@ class MainWindow(QMainWindow):
         scroll.setWidget(self.scroll_content)
         main_layout.addWidget(scroll, 1)
 
-        # Bottom Bar
+        # Footer Bar
         footer = QHBoxLayout()
         footer.setSpacing(12)
 
@@ -639,134 +723,200 @@ class MainWindow(QMainWindow):
         main_layout.addLayout(footer)
 
     def load_config(self):
-        loaded = False
-        self.presets = {"Default": []}
-        self.preset_modes = {}
-        self.active_preset = "Default"
-
+        loaded_zones = []
         if os.path.exists(CONFIG_PATH):
             try:
                 with open(CONFIG_PATH, "r", encoding="utf-8") as f:
                     config = json.load(f)
-                    if "presets" in config:
-                        self.presets = config["presets"]
-                        self.active_preset = config.get("active_preset", "Default")
-                        self.preset_modes = config.get("preset_modes", {})
-                        loaded = True
-                    elif "zones" in config:
-                        self.presets["Default"] = config["zones"]
-                        loaded = True
-            except: pass
+                    if "layout_settings" in config:
+                        self.layout_settings.update(config["layout_settings"])
+                        if "media_profiles" in config["layout_settings"]:
+                            self.media_profiles = config["layout_settings"]["media_profiles"]
+                    if "zones" in config and isinstance(config["zones"], list):
+                        loaded_zones = config["zones"]
+                    elif "presets" in config:
+                        active = config.get("active_preset", "Default")
+                        loaded_zones = config["presets"].get(active, [])
+            except:
+                pass
 
-        if not loaded or not self.presets.get(self.active_preset):
-            self.presets["Default"] = [
-                {"window_title": "Code", "pos": "Fill Space", "stat": "Fill (Any)", "val": ""},
-                {"window_title": "Netflix", "pos": "Bottom-Left", "stat": "Aspect Ratio", "val": "16:9"},
-                {"window_title": "Chrome", "pos": "Top-Left", "stat": "Height (px)", "val": "432"}
+        if not loaded_zones:
+            loaded_zones = [
+                {"window_title": "MYAEW", "role": "media", "pos": "Bottom-Left", "stat": "Aspect Ratio", "val": "16:9"},
+                {"window_title": "Google Chrome", "role": "chrome", "pos": "Top-Left", "stat": "Height (px)", "val": "432"},
+                {"window_title": "Visual Studio Code", "role": "vscode", "pos": "Right", "stat": "Fill (Any)", "val": ""}
             ]
-            self.active_preset = "Default"
-            self.preset_modes["Default"] = "Equal Sizes"
 
-        self.populate_presets()
+        self._updating_controls = True
+        self.vscode_side_combo.setCurrentText(self.layout_settings.get("vscode_side", "Right"))
+        self.chrome_sizing_combo.setCurrentText(self.layout_settings.get("chrome_sizing", "Equal Size"))
+        self.refresh_media_profiles_combo()
+        self._updating_controls = False
 
-    def populate_presets(self):
-        self.preset_combo.blockSignals(True)
-        self.preset_combo.clear()
-        self.preset_combo.addItems(list(self.presets.keys()))
-        if self.active_preset in self.presets:
-            self.preset_combo.setCurrentText(self.active_preset)
-        self.preset_combo.blockSignals(False)
-        self.load_preset(self.active_preset)
-
-    def load_preset(self, name):
         for row in self.rows[:]:
             self.rows_layout.removeWidget(row)
             row.deleteLater()
         self.rows.clear()
 
-        zones = self.presets.get(name, [])
-        mode = self.preset_modes.get(name)
-        if not mode and zones and isinstance(zones, list) and len(zones) > 0:
-            mode = zones[0].get("split_mode")
-        if not mode:
-            mode = "Maximize Size" if "PiP" in name else "Equal Sizes"
-
-        self.split_combo.blockSignals(True)
-        self.split_combo.setCurrentText(mode)
-        self.split_combo.blockSignals(False)
-
-        for z in zones:
+        for z in loaded_zones:
             self.add_row(z)
 
+        self.sync_roles_with_layout_settings(update_ui=False)
         self.update_preview()
 
-    def on_preset_changed(self, name):
-        if name and name in self.presets:
-            self.active_preset = name
-            self.load_preset(name)
+    def refresh_media_profiles_combo(self):
+        self.media_ar_combo.blockSignals(True)
+        self.media_ar_combo.clear()
+        for name in self.media_profiles.keys():
+            self.media_ar_combo.addItem(name)
+        active = self.layout_settings.get("active_media_profile")
+        if active and active in self.media_profiles:
+            self.media_ar_combo.setCurrentText(active)
+        elif self.media_profiles:
+            first_key = list(self.media_profiles.keys())[0]
+            self.media_ar_combo.setCurrentText(first_key)
+            self.layout_settings["active_media_profile"] = first_key
+        self.media_ar_combo.blockSignals(False)
 
-    def on_split_mode_changed(self):
-        mode = self.split_combo.currentText()
-        self.preset_modes[self.active_preset] = mode
-        self.presets[self.active_preset] = self._get_current_zones_with_rects()
+    def on_vscode_side_changed(self, text):
+        if self._updating_controls:
+            return
+        self.layout_settings["vscode_side"] = text
+        self.sync_roles_with_layout_settings(update_ui=True)
         self.save_to_disk()
         self.update_preview()
 
-    def _get_current_zones_with_rects(self):
-        zones_data = []
-        mode = self.split_combo.currentText()
-        for row in self.rows:
-            data = row.get_data()
-            if data["window_title"]:
-                data["split_mode"] = mode
-                zones_data.append(data)
-
-        screen = self.screen().geometry()
-        return self.calculate_rects(zones_data, screen.width(), screen.height(), split_mode=mode)
-
-    def save_preset_as(self):
-        name, ok = QInputDialog.getText(self, "Save Preset", "Preset Name:", text=self.active_preset)
-        if ok and name.strip():
-            name = name.strip()
-            self.active_preset = name
-            self.preset_modes[name] = self.split_combo.currentText()
-            self.presets[name] = self._get_current_zones_with_rects()
-
-            if self.preset_combo.findText(name) == -1:
-                self.preset_combo.blockSignals(True)
-                self.preset_combo.addItem(name)
-                self.preset_combo.blockSignals(False)
-
-            self.preset_combo.blockSignals(True)
-            self.preset_combo.setCurrentText(name)
-            self.preset_combo.blockSignals(False)
-
-            self.save_to_disk()
-
-    def delete_preset(self):
-        if len(self.presets) <= 1:
-            QMessageBox.warning(self, "Cannot Delete", "You must have at least one preset.")
+    def on_chrome_sizing_changed(self, text):
+        if self._updating_controls:
             return
+        self.layout_settings["chrome_sizing"] = text
+        self.sync_roles_with_layout_settings(update_ui=True)
+        self.save_to_disk()
+        self.update_preview()
 
-        reply = QMessageBox.question(self, "Delete Preset", f"Are you sure you want to delete '{self.active_preset}'?",
-                                     QMessageBox.StandardButton.Yes | QMessageBox.StandardButton.No)
+    def on_media_ar_profile_changed(self, name):
+        if self._updating_controls or not name:
+            return
+        self.layout_settings["active_media_profile"] = name
+        ar_val = self.media_profiles.get(name, "16:9")
+        media_row = self.find_row_by_role("media")
+        if media_row:
+            media_row.val_input.setText(ar_val)
+        self.save_to_disk()
+        self.update_preview()
 
-        if reply == QMessageBox.StandardButton.Yes:
-            del self.presets[self.active_preset]
-            if self.active_preset in self.preset_modes:
-                del self.preset_modes[self.active_preset]
-            self.active_preset = list(self.presets.keys())[0]
-            self.populate_presets()
+    def detect_and_save_media_ar(self):
+        dialog = AppSelectDialog(self, return_hwnd=True)
+        if dialog.exec():
+            hwnd = dialog.selected_hwnd
+            title = dialog.get_selected()
+            if not hwnd:
+                return
+            detected_ar, w, h = calculate_window_aspect_ratio(hwnd)
+            if not detected_ar:
+                QMessageBox.warning(self, "Could not detect", "Could not calculate aspect ratio for the selected window.")
+                return
+
+            clean_name = title.split(" - ")[-1].strip() or "Custom Media"
+            suggested_profile = f"{clean_name} ({detected_ar})"
+
+            name, ok = QInputDialog.getText(
+                self, "Save Media Aspect Ratio",
+                f"Detected size: {w} × {h} px\nAspect Ratio: {detected_ar}\n\nEnter profile name:",
+                text=suggested_profile
+            )
+            if ok and name.strip():
+                p_name = name.strip()
+                self.media_profiles[p_name] = detected_ar
+                self.layout_settings["active_media_profile"] = p_name
+                media_row = self.find_row_by_role("media")
+                if media_row:
+                    if clean_name and clean_name not in media_row.app_match.text():
+                        media_row.app_match.setText(clean_name)
+                    media_row.val_input.setText(detected_ar)
+                self.refresh_media_profiles_combo()
+                self.save_to_disk()
+                self.update_preview()
+
+    def add_custom_ar(self):
+        ratio, ok = QInputDialog.getText(self, "Add Aspect Ratio", "Enter aspect ratio (e.g. 16:9, 4:3, 2.39:1):", text="16:9")
+        if ok and ratio.strip():
+            ratio = ratio.strip()
+            name, n_ok = QInputDialog.getText(self, "Aspect Ratio Name", "Enter name for this aspect ratio:", text=ratio)
+            if n_ok and name.strip():
+                p_name = name.strip()
+                self.media_profiles[p_name] = ratio
+                self.layout_settings["active_media_profile"] = p_name
+                self.refresh_media_profiles_combo()
+                media_row = self.find_row_by_role("media")
+                if media_row:
+                    media_row.val_input.setText(ratio)
+                self.save_to_disk()
+                self.update_preview()
+
+    def delete_current_ar(self):
+        curr = self.media_ar_combo.currentText()
+        if len(self.media_profiles) <= 1:
+            QMessageBox.warning(self, "Cannot Delete", "You must have at least one media aspect ratio profile.")
+            return
+        if curr in self.media_profiles:
+            del self.media_profiles[curr]
+            self.layout_settings["active_media_profile"] = list(self.media_profiles.keys())[0]
+            self.refresh_media_profiles_combo()
             self.save_to_disk()
+            self.update_preview()
 
-    def save_to_disk(self):
-        self.preset_modes[self.active_preset] = self.split_combo.currentText()
-        with open(CONFIG_PATH, "w", encoding="utf-8") as f:
-            json.dump({
-                "active_preset": self.active_preset,
-                "presets": self.presets,
-                "preset_modes": self.preset_modes
-            }, f, indent=2)
+    def find_row_by_role(self, role):
+        for r in self.rows:
+            if getattr(r, "role", "") == role:
+                return r
+        for r in self.rows:
+            title = r.app_match.text().lower()
+            if role == "vscode" and ("code" in title or "visual studio" in title):
+                r.role = "vscode"
+                return r
+            if role == "chrome" and "chrome" in title:
+                r.role = "chrome"
+                return r
+            if role == "media" and ("myaew" in title or "netflix" in title or "picture" in title or "pip" in title):
+                r.role = "media"
+                return r
+        return None
+
+    def sync_roles_with_layout_settings(self, update_ui=True):
+        vscode_side = self.layout_settings.get("vscode_side", "Right")
+        other_side = "Left" if vscode_side == "Right" else "Right"
+        top_pos = f"Top-{other_side}"
+        bot_pos = f"Bottom-{other_side}"
+
+        v_row = self.find_row_by_role("vscode")
+        c_row = self.find_row_by_role("chrome")
+        m_row = self.find_row_by_role("media")
+
+        if v_row:
+            v_row.role = "vscode"
+            v_row.pos_combo.blockSignals(True)
+            v_row.pos_combo.setCurrentText(vscode_side)
+            v_row.pos_combo.blockSignals(False)
+
+        if c_row:
+            c_row.role = "chrome"
+            c_row.pos_combo.blockSignals(True)
+            c_row.pos_combo.setCurrentText(top_pos)
+            c_row.pos_combo.blockSignals(False)
+
+        if m_row:
+            m_row.role = "media"
+            m_row.pos_combo.blockSignals(True)
+            m_row.pos_combo.setCurrentText(bot_pos)
+            m_row.pos_combo.blockSignals(False)
+            curr_prof = self.layout_settings.get("active_media_profile")
+            if curr_prof and curr_prof in self.media_profiles:
+                m_row.val_input.setText(self.media_profiles[curr_prof])
+
+        if update_ui:
+            for r in self.rows:
+                r.update_visibility()
 
     def add_row(self, data=None):
         idx = len(self.rows) + 1
@@ -783,83 +933,91 @@ class MainWindow(QMainWindow):
                 r.set_index(i + 1)
             self.update_preview()
 
-    def update_preview(self):
+    def _get_current_zones_with_rects(self):
         zones_data = []
-        mode = self.split_combo.currentText()
         for row in self.rows:
             data = row.get_data()
             if not data["window_title"]:
                 data["window_title"] = "Empty"
-            data["split_mode"] = mode
             zones_data.append(data)
 
         screen = self.screen().geometry()
-        zones_data = self.calculate_rects(zones_data, screen.width(), screen.height(), split_mode=mode)
+        split_mode = "Equal Sizes" if self.layout_settings.get("chrome_sizing") == "Equal Size" else "Maximize Size"
+        return self.calculate_rects(zones_data, screen.width(), screen.height(), split_mode=split_mode)
+
+    def update_preview(self):
+        zones_data = self._get_current_zones_with_rects()
+        screen = self.screen().geometry()
         self.preview.update_zones(zones_data, screen)
 
-    def calculate_rects(self, zones, screen_w, screen_h, split_mode="Maximize Size"):
+    def calculate_rects(self, zones, screen_w, screen_h, split_mode="Equal Sizes"):
         rem_x, rem_y, rem_w, rem_h = 0, 0, screen_w, screen_h
 
         def get_val(z, max_val, is_width=True):
-            stat = z.get('stat', '')
-            val = z.get('val', '0')
+            stat = z.get("stat", "")
+            val = z.get("val", "0")
             try:
-                if stat == "Width (px)" and is_width: return int(val)
-                if stat in ["Height (px)", "Min Height (px)"] and not is_width: return int(val)
-                if stat == "Width (%)" and is_width: return int(max_val * float(val) / 100.0)
-                if stat in ["Height (%)", "Min Height (%)"] and not is_width: return int(max_val * float(val) / 100.0)
-            except: pass
+                if stat == "Width (px)" and is_width:
+                    return int(val)
+                if stat in ["Height (px)", "Min Height (px)"] and not is_width:
+                    return int(val)
+                if stat == "Width (%)" and is_width:
+                    return int(max_val * float(val) / 100.0)
+                if stat in ["Height (%)", "Min Height (%)"] and not is_width:
+                    return int(max_val * float(val) / 100.0)
+            except:
+                pass
             return 0
 
         def parse_ar(val):
             try:
-                v = val.replace(':', '/')
-                num, den = map(float, v.split('/'))
+                v = val.replace(":", "/")
+                num, den = map(float, v.split("/"))
                 return num / den
             except:
                 return 16.0 / 9.0
 
         def is_fill(z):
-            return z.get('pos') == "Fill Space" or z.get('stat') == "Fill (Any)"
+            return z.get("pos") == "Fill Space" or z.get("stat") == "Fill (Any)"
 
         # Pass 1: Explicit Side Snaps (Left, Right, Top, Bottom)
         for z in zones:
-            pos = z.get('pos', '')
+            pos = z.get("pos", "")
             if is_fill(z) or pos in ["Top-Left", "Bottom-Left", "Top-Right", "Bottom-Right"]:
                 continue
 
-            stat = z.get('stat', '')
+            stat = z.get("stat", "")
             if pos in ["Right", "Left"]:
                 if "Aspect Ratio" in stat:
-                    w = int(rem_h * parse_ar(z.get('val', '')))
+                    w = int(rem_h * parse_ar(z.get("val", "")))
                 else:
                     w = get_val(z, rem_w, True) or (rem_w // 2)
 
                 w = max(0, min(w, rem_w))
                 if pos == "Right":
-                    z['rect'] = {"x": rem_x + rem_w - w, "y": rem_y, "width": w, "height": rem_h}
+                    z["rect"] = {"x": rem_x + rem_w - w, "y": rem_y, "width": w, "height": rem_h}
                     rem_w -= w
                 else:
-                    z['rect'] = {"x": rem_x, "y": rem_y, "width": w, "height": rem_h}
+                    z["rect"] = {"x": rem_x, "y": rem_y, "width": w, "height": rem_h}
                     rem_x += w
                     rem_w -= w
 
             elif pos in ["Top", "Bottom"]:
                 if "Aspect Ratio" in stat:
-                    h = int(rem_w / parse_ar(z.get('val', '')))
+                    h = int(rem_w / parse_ar(z.get("val", "")))
                 else:
                     h = get_val(z, rem_h, False) or (rem_h // 2)
 
                 h = max(0, min(h, rem_h))
                 if pos == "Top":
-                    z['rect'] = {"x": rem_x, "y": rem_y, "width": rem_w, "height": h}
+                    z["rect"] = {"x": rem_x, "y": rem_y, "width": rem_w, "height": h}
                     rem_y += h
                     rem_h -= h
                 else:
-                    z['rect'] = {"x": rem_x, "y": rem_y + rem_h - h, "width": rem_w, "height": h}
+                    z["rect"] = {"x": rem_x, "y": rem_y + rem_h - h, "width": rem_w, "height": h}
                     rem_h -= h
 
-        # Pass 2: Smart Corner Columns (Left and Right Columns)
+        # Pass 2: Corner Columns (Left and Right Columns)
         def solve_column(top_zone, bot_zone, col_x, total_h, total_w):
             if not top_zone and not bot_zone:
                 return 0
@@ -867,20 +1025,14 @@ class MainWindow(QMainWindow):
             top_h, bot_h, col_w = 0, 0, 0
 
             if top_zone and bot_zone:
-                top_stat = top_zone.get('stat', '')
-                bot_stat = bot_zone.get('stat', '')
+                top_stat = top_zone.get("stat", "")
+                bot_stat = bot_zone.get("stat", "")
 
-                def get_mode(ar_zone):
-                    stat = ar_zone.get('stat', '')
-                    if "Equal" in stat: return "Equal Sizes"
-                    if "Max" in stat: return "Maximize Size"
-                    return ar_zone.get('split_mode', split_mode)
+                mode = split_mode
 
                 if "Height" in top_stat and "Aspect Ratio" in bot_stat:
-                    min_top_h = get_val(top_zone, total_h, False)
-                    min_top_h = max(0, min(min_top_h, total_h))
-                    ar = parse_ar(bot_zone.get('val', ''))
-                    mode = get_mode(bot_zone)
+                    min_top_h = get_val(top_zone, total_h, False) or 432
+                    ar = parse_ar(bot_zone.get("val", ""))
                     if mode == "Equal Sizes":
                         target_h = total_h // 2
                         top_h = max(min_top_h, target_h)
@@ -890,10 +1042,8 @@ class MainWindow(QMainWindow):
                         bot_h = total_h - top_h
                     col_w = int(bot_h * ar)
                 elif "Height" in bot_stat and "Aspect Ratio" in top_stat:
-                    min_bot_h = get_val(bot_zone, total_h, False)
-                    min_bot_h = max(0, min(min_bot_h, total_h))
-                    ar = parse_ar(top_zone.get('val', ''))
-                    mode = get_mode(top_zone)
+                    min_bot_h = get_val(bot_zone, total_h, False) or 432
+                    ar = parse_ar(top_zone.get("val", ""))
                     if mode == "Equal Sizes":
                         target_h = total_h // 2
                         bot_h = max(min_bot_h, target_h)
@@ -909,26 +1059,26 @@ class MainWindow(QMainWindow):
                 elif "Aspect Ratio" in top_stat and "Aspect Ratio" in bot_stat:
                     top_h = total_h // 2
                     bot_h = total_h - top_h
-                    ar_top = parse_ar(top_zone.get('val', ''))
-                    ar_bot = parse_ar(bot_zone.get('val', ''))
+                    ar_top = parse_ar(top_zone.get("val", ""))
+                    ar_bot = parse_ar(bot_zone.get("val", ""))
                     col_w = max(int(top_h * ar_top), int(bot_h * ar_bot))
                 else:
                     top_h = get_val(top_zone, total_h, False) or (total_h // 2)
                     bot_h = total_h - top_h
                     col_w = max(get_val(top_zone, total_w, True), get_val(bot_zone, total_w, True)) or (total_w // 2)
             elif top_zone:
-                top_stat = top_zone.get('stat', '')
+                top_stat = top_zone.get("stat", "")
                 if "Aspect Ratio" in top_stat:
                     top_h = total_h
-                    col_w = int(top_h * parse_ar(top_zone.get('val', '')))
+                    col_w = int(top_h * parse_ar(top_zone.get("val", "")))
                 else:
                     top_h = get_val(top_zone, total_h, False) or total_h
                     col_w = get_val(top_zone, total_w, True) or (total_w // 2)
             elif bot_zone:
-                bot_stat = bot_zone.get('stat', '')
+                bot_stat = bot_zone.get("stat", "")
                 if "Aspect Ratio" in bot_stat:
                     bot_h = total_h
-                    col_w = int(bot_h * parse_ar(bot_zone.get('val', '')))
+                    col_w = int(bot_h * parse_ar(bot_zone.get("val", "")))
                 else:
                     bot_h = get_val(bot_zone, total_h, False) or total_h
                     col_w = get_val(bot_zone, total_w, True) or (total_w // 2)
@@ -936,45 +1086,55 @@ class MainWindow(QMainWindow):
             col_w = max(0, min(col_w, total_w))
 
             if top_zone:
-                top_zone['rect'] = {"x": col_x, "y": rem_y, "width": col_w, "height": top_h}
+                top_zone["rect"] = {"x": col_x, "y": rem_y, "width": col_w, "height": top_h}
             if bot_zone:
                 bot_y = rem_y + (top_h if top_zone else (total_h - bot_h))
-                bot_zone['rect'] = {"x": col_x, "y": bot_y, "width": col_w, "height": bot_h}
+                bot_zone["rect"] = {"x": col_x, "y": bot_y, "width": col_w, "height": bot_h}
 
             return col_w
 
         # Solve Left Column
-        tl_zone = next((z for z in zones if z.get('pos') == "Top-Left"), None)
-        bl_zone = next((z for z in zones if z.get('pos') == "Bottom-Left"), None)
+        tl_zone = next((z for z in zones if z.get("pos") == "Top-Left"), None)
+        bl_zone = next((z for z in zones if z.get("pos") == "Bottom-Left"), None)
         left_w = solve_column(tl_zone, bl_zone, rem_x, rem_h, rem_w)
         rem_x += left_w
         rem_w -= left_w
 
         # Solve Right Column
-        tr_zone = next((z for z in zones if z.get('pos') == "Top-Right"), None)
-        br_zone = next((z for z in zones if z.get('pos') == "Bottom-Right"), None)
+        tr_zone = next((z for z in zones if z.get("pos") == "Top-Right"), None)
+        br_zone = next((z for z in zones if z.get("pos") == "Bottom-Right"), None)
         right_x = rem_x + rem_w
         right_w = solve_column(tr_zone, br_zone, right_x - min(rem_w, rem_w // 2), rem_h, rem_w)
         if right_w > 0:
-            if tr_zone: tr_zone['rect']['x'] = rem_x + rem_w - right_w
-            if br_zone: br_zone['rect']['x'] = rem_x + rem_w - right_w
+            if tr_zone:
+                tr_zone["rect"]["x"] = rem_x + rem_w - right_w
+            if br_zone:
+                br_zone["rect"]["x"] = rem_x + rem_w - right_w
             rem_w -= right_w
 
         # Pass 3: Fill Remaining Space
-        fill_zones = [z for z in zones if 'rect' not in z or is_fill(z)]
+        fill_zones = [z for z in zones if "rect" not in z or is_fill(z)]
         if fill_zones:
             n = len(fill_zones)
             fill_w = rem_w // n
             for i, z in enumerate(fill_zones):
                 fw = fill_w if i < n - 1 else (rem_w - i * fill_w)
-                z['rect'] = {"x": rem_x + i * fill_w, "y": rem_y, "width": max(0, fw), "height": rem_h}
+                z["rect"] = {"x": rem_x + i * fill_w, "y": rem_y, "width": max(0, fw), "height": rem_h}
 
         return zones
 
-    def apply_layout(self):
-        self.presets[self.active_preset] = self._get_current_zones_with_rects()
-        self.save_to_disk()
+    def save_to_disk(self):
+        zones_with_rects = self._get_current_zones_with_rects()
+        self.layout_settings["media_profiles"] = self.media_profiles
+        output_data = {
+            "layout_settings": self.layout_settings,
+            "zones": zones_with_rects
+        }
+        with open(CONFIG_PATH, "w", encoding="utf-8") as f:
+            json.dump(output_data, f, indent=2)
 
+    def apply_layout(self):
+        self.save_to_disk()
         try:
             subprocess.Popen([sys.executable, MAIN_SCRIPT], shell=False)
         except Exception as e:

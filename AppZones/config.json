@@ -1,7 +1,7 @@
 {
   "layout_settings": {
     "vscode_side": "Right",
-    "chrome_sizing": "Equal Size",
+    "chrome_sizing": "Minimum Size (432px)",
     "active_media_profile": "App (1.68:1)",
     "media_profiles": {
       "16:9 (PiP)": "16:9",
@@ -20,9 +20,9 @@
       "val": "1.68:1",
       "rect": {
         "x": 0,
-        "y": 540,
-        "width": 907,
-        "height": 540
+        "y": 432,
+        "width": 1088,
+        "height": 648
       }
     },
     {
@@ -34,8 +34,8 @@
       "rect": {
         "x": 0,
         "y": 0,
-        "width": 907,
-        "height": 540
+        "width": 1088,
+        "height": 432
       }
     },
     {
@@ -45,9 +45,9 @@
       "stat": "Fill (Any)",
       "val": "",
       "rect": {
-        "x": 907,
+        "x": 1088,
         "y": 0,
-        "width": 1013,
+        "width": 832,
         "height": 1080
       }
     }

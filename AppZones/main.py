@@ -2,6 +2,34 @@ import json
 import os
 import win32gui
 import win32con
+import ctypes
+from ctypes import wintypes
+
+class RECT(ctypes.Structure):
+    _fields_ = [('left', wintypes.LONG), 
+                ('top', wintypes.LONG), 
+                ('right', wintypes.LONG), 
+                ('bottom', wintypes.LONG)]
+
+def get_window_margins(hwnd):
+    """
+    Returns (pad_left, pad_top, pad_right, pad_bottom) by comparing
+    GetWindowRect (which includes invisible resize borders) with 
+    DwmGetWindowAttribute (which is the actual visual frame).
+    """
+    try:
+        wr = win32gui.GetWindowRect(hwnd)
+        fr = RECT()
+        # 9 is DWMWA_EXTENDED_FRAME_BOUNDS
+        if ctypes.windll.dwmapi.DwmGetWindowAttribute(hwnd, 9, ctypes.byref(fr), ctypes.sizeof(fr)) == 0:
+            pad_left = fr.left - wr[0]
+            pad_top = fr.top - wr[1]
+            pad_right = wr[2] - fr.right
+            pad_bottom = wr[3] - fr.bottom
+            return pad_left, pad_top, pad_right, pad_bottom
+    except Exception:
+        pass
+    return 0, 0, 0, 0
 
 def load_config(path="config.json"):
     if not os.path.exists(path): return {"zones": []}
@@ -28,15 +56,33 @@ def position_window(hwnd, rect):
         else:
             win32gui.ShowWindow(hwnd, win32con.SW_NORMAL)
         
+        # Calculate the invisible borders
+        pad_left, pad_top, pad_right, pad_bottom = get_window_margins(hwnd)
+        
+        # Adjust the target rect to counteract the invisible borders
+        x = int(rect["x"]) - pad_left
+        y = int(rect["y"]) - pad_top
+        w = int(rect["width"]) + pad_left + pad_right
+        h = int(rect["height"]) + pad_top + pad_bottom
+        
         win32gui.SetWindowPos(
             hwnd, win32con.HWND_TOP,
-            int(rect["x"]), int(rect["y"]), int(rect["width"]), int(rect["height"]),
+            x, y, w, h,
             0
         )
     except Exception as e:
         print(f"Failed to position window {hwnd}: {e}")
 
 def main():
+    # Ensure process is DPI aware so coordinates perfectly match screen pixels
+    try:
+        ctypes.windll.shcore.SetProcessDpiAwareness(2) # PROCESS_PER_MONITOR_DPI_AWARE
+    except Exception:
+        try:
+            ctypes.windll.user32.SetProcessDPIAware()
+        except:
+            pass
+            
     print("Starting AppZones Sleek Auto-Layout Manager...")
     config_path = os.path.join(os.path.dirname(__file__), "config.json")
     config = load_config(config_path)

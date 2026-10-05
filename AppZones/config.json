@@ -1,28 +1,34 @@
 {
   "layout_settings": {
     "vscode_side": "Right",
-    "chrome_sizing": "Minimum Size (432px)",
-    "active_media_profile": "App (1.68:1)",
+    "chrome_sizing": "590px",
+    "active_media_profile": "MYAEW (3:2)",
+    "chrome_sizes": {
+      "Equal Size": "equal",
+      "432px": "432",
+      "590px": "590px"
+    },
     "media_profiles": {
       "16:9 (PiP)": "16:9",
       "4:3 (Classic)": "4:3",
       "21:9 (Ultrawide)": "21:9",
       "1:1 (Square)": "1:1",
-      "App (1.68:1)": "1.68:1"
+      "App (1.68:1)": "1.68:1",
+      "MYAEW (3:2)": "3:2"
     }
   },
   "zones": [
     {
-      "window_title": "YouTube",
+      "window_title": "MYAEW",
       "role": "media",
       "pos": "Bottom-Left",
       "stat": "Aspect Ratio",
-      "val": "1.68:1",
+      "val": "3:2",
       "rect": {
         "x": 0,
-        "y": 432,
-        "width": 1088,
-        "height": 648
+        "y": 590,
+        "width": 735,
+        "height": 490
       }
     },
     {
@@ -30,12 +36,12 @@
       "role": "chrome",
       "pos": "Top-Left",
       "stat": "Height (px)",
-      "val": "432",
+      "val": "590",
       "rect": {
         "x": 0,
         "y": 0,
-        "width": 1088,
-        "height": 432
+        "width": 735,
+        "height": 590
       }
     },
     {
@@ -45,9 +51,9 @@
       "stat": "Fill (Any)",
       "val": "",
       "rect": {
-        "x": 1088,
+        "x": 735,
         "y": 0,
-        "width": 832,
+        "width": 1185,
         "height": 1080
       }
     }

@@ -2,7 +2,10 @@ import sys
 import json
 import os
 import math
+import re
 import subprocess
+import ctypes
+from ctypes import wintypes
 import win32gui
 from PyQt6.QtWidgets import (QApplication, QMainWindow, QWidget, QVBoxLayout, QHBoxLayout,
                              QPushButton, QLabel, QComboBox, QLineEdit, QScrollArea, QFrame, QDialog, QListWidget,
@@ -548,10 +551,14 @@ class MainWindow(QMainWindow):
     def __init__(self):
         super().__init__()
         self.setWindowTitle("AppZones - FancyZones Auto-Layout")
-        self.resize(920, 880)
+        self.resize(920, 720)
         self.setStyleSheet(STYLESHEET)
 
         self.rows = []
+        self.chrome_sizes = {
+            "Equal Size": "equal",
+            "432px": "432"
+        }
         self.media_profiles = {
             "16:9 (PiP)": "16:9",
             "4:3 (Classic)": "4:3",
@@ -575,7 +582,7 @@ class MainWindow(QMainWindow):
         self.setCentralWidget(central)
         main_layout = QVBoxLayout(central)
         main_layout.setContentsMargins(24, 20, 24, 20)
-        main_layout.setSpacing(16)
+        main_layout.setSpacing(14)
 
         # Header Area
         header = QHBoxLayout()
@@ -619,7 +626,7 @@ class MainWindow(QMainWindow):
 
         # Row 1: VS Code Placement & Chrome Sizing
         row1 = QHBoxLayout()
-        row1.setSpacing(14)
+        row1.setSpacing(10)
 
         lbl_side = QLabel("VS Code Side:")
         lbl_side.setObjectName("field_label")
@@ -636,10 +643,29 @@ class MainWindow(QMainWindow):
         row1.addWidget(lbl_chrome)
 
         self.chrome_sizing_combo = NoWheelComboBox()
-        self.chrome_sizing_combo.addItems(["Equal Size", "Minimum Size (432px)"])
-        self.chrome_sizing_combo.setToolTip("Equal Size: Chrome and Media split column height equally.\nMinimum Size: Chrome is kept at 432px, Media expands.")
+        self.chrome_sizing_combo.setMinimumWidth(130)
+        self.chrome_sizing_combo.setToolTip("Equal Size: Chrome and Media split height equally.\nCustom Size: User-defined height in pixels or percentage.")
         self.chrome_sizing_combo.currentTextChanged.connect(self.on_chrome_sizing_changed)
         row1.addWidget(self.chrome_sizing_combo)
+
+        btn_detect_chrome = QPushButton("📷 Save Current Chrome Size...")
+        btn_detect_chrome.setObjectName("secondary_action")
+        btn_detect_chrome.setToolTip("Inspect a running window and automatically calculate and save its height for Chrome")
+        btn_detect_chrome.clicked.connect(self.detect_and_save_chrome_size)
+        row1.addWidget(btn_detect_chrome)
+
+        btn_add_chrome = QPushButton("+ Custom Size")
+        btn_add_chrome.setObjectName("secondary_action")
+        btn_add_chrome.setToolTip("Add a custom height for Google Chrome (e.g. 432px, 500px, 40%)")
+        btn_add_chrome.clicked.connect(self.add_custom_chrome_size)
+        row1.addWidget(btn_add_chrome)
+
+        btn_del_chrome = QPushButton("Delete Size")
+        btn_del_chrome.setObjectName("danger")
+        btn_del_chrome.setToolTip("Delete selected custom Chrome size")
+        btn_del_chrome.clicked.connect(self.delete_current_chrome_size)
+        row1.addWidget(btn_del_chrome)
+
         row1.addStretch()
         ctrl_main_layout.addLayout(row1)
 
@@ -683,33 +709,56 @@ class MainWindow(QMainWindow):
         main_layout.addWidget(lbl_preview)
 
         self.preview = PreviewWidget()
-        main_layout.addWidget(self.preview)
+        main_layout.addWidget(self.preview, 1)
 
-        # Section: Zones Configuration
+        # Section: Collapsible Zone Rules
+        zone_header = QHBoxLayout()
+        zone_header.setSpacing(10)
+
         lbl_zones = QLabel("Zone Rules")
         lbl_zones.setObjectName("section_title")
-        main_layout.addWidget(lbl_zones)
+        zone_header.addWidget(lbl_zones)
 
-        scroll = QScrollArea()
-        scroll.setWidgetResizable(True)
-        scroll.setFrameShape(QFrame.Shape.NoFrame)
+        self.btn_toggle_zones = QPushButton("▶ Show Zone Rules")
+        self.btn_toggle_zones.setObjectName("secondary_action")
+        self.btn_toggle_zones.setCursor(Qt.CursorShape.PointingHandCursor)
+        self.btn_toggle_zones.clicked.connect(self.toggle_zone_rules)
+        zone_header.addWidget(self.btn_toggle_zones)
+
+        zone_header.addStretch()
+        main_layout.addLayout(zone_header)
+
+        # Collapsible Zone Container (Hidden by default)
+        self.zone_container = QWidget()
+        zone_container_layout = QVBoxLayout(self.zone_container)
+        zone_container_layout.setContentsMargins(0, 0, 0, 0)
+        zone_container_layout.setSpacing(8)
+
+        self.scroll = QScrollArea()
+        self.scroll.setWidgetResizable(True)
+        self.scroll.setFrameShape(QFrame.Shape.NoFrame)
+        self.scroll.setMaximumHeight(300)
         self.scroll_content = QWidget()
         self.scroll_content.setObjectName("scroll_content")
         self.rows_layout = QVBoxLayout(self.scroll_content)
         self.rows_layout.setAlignment(Qt.AlignmentFlag.AlignTop)
         self.rows_layout.setSpacing(10)
         self.rows_layout.setContentsMargins(0, 0, 0, 0)
-        scroll.setWidget(self.scroll_content)
-        main_layout.addWidget(scroll, 1)
+        self.scroll.setWidget(self.scroll_content)
+        zone_container_layout.addWidget(self.scroll)
+
+        btn_add = QPushButton("+ Add Zone")
+        btn_add.setObjectName("secondary_action")
+        btn_add.setMinimumHeight(34)
+        btn_add.clicked.connect(lambda: self.add_row())
+        zone_container_layout.addWidget(btn_add)
+
+        self.zone_container.setVisible(False)
+        main_layout.addWidget(self.zone_container)
 
         # Footer Bar
         footer = QHBoxLayout()
         footer.setSpacing(12)
-
-        btn_add = QPushButton("+ Add Zone")
-        btn_add.setObjectName("secondary_action")
-        btn_add.setMinimumHeight(38)
-        btn_add.clicked.connect(lambda: self.add_row())
 
         btn_apply = QPushButton("Apply Layout")
         btn_apply.setObjectName("primary")
@@ -717,10 +766,17 @@ class MainWindow(QMainWindow):
         btn_apply.setMinimumWidth(160)
         btn_apply.clicked.connect(self.apply_layout)
 
-        footer.addWidget(btn_add)
         footer.addStretch()
         footer.addWidget(btn_apply)
         main_layout.addLayout(footer)
+
+    def toggle_zone_rules(self):
+        is_visible = self.zone_container.isVisible()
+        self.zone_container.setVisible(not is_visible)
+        if not is_visible:
+            self.btn_toggle_zones.setText("▼ Hide Zone Rules")
+        else:
+            self.btn_toggle_zones.setText("▶ Show Zone Rules")
 
     def load_config(self):
         loaded_zones = []
@@ -732,6 +788,8 @@ class MainWindow(QMainWindow):
                         self.layout_settings.update(config["layout_settings"])
                         if "media_profiles" in config["layout_settings"]:
                             self.media_profiles = config["layout_settings"]["media_profiles"]
+                        if "chrome_sizes" in config["layout_settings"]:
+                            self.chrome_sizes.update(config["layout_settings"]["chrome_sizes"])
                     if "zones" in config and isinstance(config["zones"], list):
                         loaded_zones = config["zones"]
                     elif "presets" in config:
@@ -739,6 +797,11 @@ class MainWindow(QMainWindow):
                         loaded_zones = config["presets"].get(active, [])
             except:
                 pass
+
+        if "Equal Size" not in self.chrome_sizes:
+            self.chrome_sizes["Equal Size"] = "equal"
+        if "432px" not in self.chrome_sizes:
+            self.chrome_sizes["432px"] = "432"
 
         if not loaded_zones:
             loaded_zones = [
@@ -749,7 +812,7 @@ class MainWindow(QMainWindow):
 
         self._updating_controls = True
         self.vscode_side_combo.setCurrentText(self.layout_settings.get("vscode_side", "Right"))
-        self.chrome_sizing_combo.setCurrentText(self.layout_settings.get("chrome_sizing", "Equal Size"))
+        self.refresh_chrome_sizing_combo()
         self.refresh_media_profiles_combo()
         self._updating_controls = False
 
@@ -763,6 +826,21 @@ class MainWindow(QMainWindow):
 
         self.sync_roles_with_layout_settings(update_ui=False)
         self.update_preview()
+
+    def refresh_chrome_sizing_combo(self):
+        self.chrome_sizing_combo.blockSignals(True)
+        self.chrome_sizing_combo.clear()
+        keys = ["Equal Size"] + [k for k in self.chrome_sizes.keys() if k != "Equal Size"]
+        for name in keys:
+            self.chrome_sizing_combo.addItem(name)
+
+        active = self.layout_settings.get("chrome_sizing", "Equal Size")
+        if active and active in self.chrome_sizes:
+            self.chrome_sizing_combo.setCurrentText(active)
+        else:
+            self.chrome_sizing_combo.setCurrentText("Equal Size")
+            self.layout_settings["chrome_sizing"] = "Equal Size"
+        self.chrome_sizing_combo.blockSignals(False)
 
     def refresh_media_profiles_combo(self):
         self.media_ar_combo.blockSignals(True)
@@ -787,12 +865,92 @@ class MainWindow(QMainWindow):
         self.update_preview()
 
     def on_chrome_sizing_changed(self, text):
-        if self._updating_controls:
+        if self._updating_controls or not text:
             return
         self.layout_settings["chrome_sizing"] = text
         self.sync_roles_with_layout_settings(update_ui=True)
         self.save_to_disk()
         self.update_preview()
+
+    def detect_and_save_chrome_size(self):
+        dialog = AppSelectDialog(self, return_hwnd=True)
+        if dialog.exec():
+            hwnd = dialog.selected_hwnd
+            title = dialog.get_selected()
+            if not hwnd:
+                return
+            h = 0
+            w = 0
+            try:
+                class RECT(ctypes.Structure):
+                    _fields_ = [('left', wintypes.LONG), ('top', wintypes.LONG), ('right', wintypes.LONG), ('bottom', wintypes.LONG)]
+                fr = RECT()
+                if ctypes.windll.dwmapi.DwmGetWindowAttribute(hwnd, 9, ctypes.byref(fr), ctypes.sizeof(fr)) == 0:
+                    w = fr.right - fr.left
+                    h = fr.bottom - fr.top
+                else:
+                    rect = win32gui.GetWindowRect(hwnd)
+                    w = rect[2] - rect[0]
+                    h = rect[3] - rect[1]
+            except Exception:
+                rect = win32gui.GetWindowRect(hwnd)
+                w = rect[2] - rect[0]
+                h = rect[3] - rect[1]
+
+            if h <= 0:
+                QMessageBox.warning(self, "Could not detect", "Could not calculate size for the selected window.")
+                return
+
+            clean_name = title.split(" - ")[-1].strip() or "Chrome"
+            suggested_profile = f"{h}px"
+
+            name, ok = QInputDialog.getText(
+                self, "Save Chrome Size",
+                f"Detected size: {w} × {h} px\nDetected height: {h}px\n\nEnter size profile name:",
+                text=suggested_profile
+            )
+            if ok and name.strip():
+                p_name = name.strip()
+                val = p_name if any(c.isdigit() for c in p_name) else f"{h}px"
+                self.chrome_sizes[p_name] = val
+                self.layout_settings["chrome_sizing"] = p_name
+                chrome_row = self.find_row_by_role("chrome")
+                if chrome_row:
+                    if clean_name and clean_name not in chrome_row.app_match.text():
+                        chrome_row.app_match.setText(clean_name)
+                self.refresh_chrome_sizing_combo()
+                self.sync_roles_with_layout_settings(update_ui=True)
+                self.save_to_disk()
+                self.update_preview()
+
+    def add_custom_chrome_size(self):
+        val, ok = QInputDialog.getText(
+            self, "Add Custom Chrome Height",
+            "Enter height in pixels or percentage (e.g. 432, 500px, 40%):",
+            text="432px"
+        )
+        if ok and val.strip():
+            val = val.strip()
+            name = val if ("px" in val or "%" in val) else f"{val}px"
+            self.chrome_sizes[name] = val
+            self.layout_settings["chrome_sizing"] = name
+            self.refresh_chrome_sizing_combo()
+            self.sync_roles_with_layout_settings(update_ui=True)
+            self.save_to_disk()
+            self.update_preview()
+
+    def delete_current_chrome_size(self):
+        curr = self.chrome_sizing_combo.currentText()
+        if curr == "Equal Size":
+            QMessageBox.warning(self, "Cannot Delete", "'Equal Size' is default and cannot be deleted.")
+            return
+        if curr in self.chrome_sizes:
+            del self.chrome_sizes[curr]
+            self.layout_settings["chrome_sizing"] = "Equal Size"
+            self.refresh_chrome_sizing_combo()
+            self.sync_roles_with_layout_settings(update_ui=True)
+            self.save_to_disk()
+            self.update_preview()
 
     def on_media_ar_profile_changed(self, name):
         if self._updating_controls or not name:
@@ -878,7 +1036,7 @@ class MainWindow(QMainWindow):
             if role == "chrome" and "chrome" in title:
                 r.role = "chrome"
                 return r
-            if role == "media" and ("myaew" in title or "netflix" in title or "picture" in title or "pip" in title):
+            if role == "media" and ("myaew" in title or "netflix" in title or "picture" in title or "pip" in title or "youtube" in title):
                 r.role = "media"
                 return r
         return None
@@ -904,6 +1062,26 @@ class MainWindow(QMainWindow):
             c_row.pos_combo.blockSignals(True)
             c_row.pos_combo.setCurrentText(top_pos)
             c_row.pos_combo.blockSignals(False)
+
+            active_sizing = self.layout_settings.get("chrome_sizing", "Equal Size")
+            size_val = self.chrome_sizes.get(active_sizing, "equal")
+            c_row.rule_combo.blockSignals(True)
+            c_row.val_input.blockSignals(True)
+            if size_val == "equal" or active_sizing == "Equal Size":
+                c_row.rule_combo.setCurrentText("Height (px)")
+                c_row.val_input.setText("")
+            else:
+                raw = str(size_val).strip()
+                if "%" in raw:
+                    c_row.rule_combo.setCurrentText("Height (%)")
+                    match = re.search(r"(\d+(\.\d+)?)", raw)
+                    c_row.val_input.setText(match.group(1) if match else raw.replace("%", "").strip())
+                else:
+                    c_row.rule_combo.setCurrentText("Height (px)")
+                    match = re.search(r"(\d+)", raw)
+                    c_row.val_input.setText(match.group(1) if match else raw.replace("px", "").strip())
+            c_row.rule_combo.blockSignals(False)
+            c_row.val_input.blockSignals(False)
 
         if m_row:
             m_row.role = "media"
@@ -942,15 +1120,16 @@ class MainWindow(QMainWindow):
             zones_data.append(data)
 
         screen = self.screen().geometry()
-        split_mode = "Equal Sizes" if self.layout_settings.get("chrome_sizing") == "Equal Size" else "Maximize Size"
-        return self.calculate_rects(zones_data, screen.width(), screen.height(), split_mode=split_mode)
+        active_chrome = self.layout_settings.get("chrome_sizing", "Equal Size")
+        chrome_val = self.chrome_sizes.get(active_chrome, "equal")
+        return self.calculate_rects(zones_data, screen.width(), screen.height(), chrome_val=chrome_val)
 
     def update_preview(self):
         zones_data = self._get_current_zones_with_rects()
         screen = self.screen().geometry()
         self.preview.update_zones(zones_data, screen)
 
-    def calculate_rects(self, zones, screen_w, screen_h, split_mode="Equal Sizes"):
+    def calculate_rects(self, zones, screen_w, screen_h, chrome_val="equal"):
         rem_x, rem_y, rem_w, rem_h = 0, 0, screen_w, screen_h
 
         def get_val(z, max_val, is_width=True):
@@ -1028,28 +1207,36 @@ class MainWindow(QMainWindow):
                 top_stat = top_zone.get("stat", "")
                 bot_stat = bot_zone.get("stat", "")
 
-                mode = split_mode
-
                 if "Height" in top_stat and "Aspect Ratio" in bot_stat:
-                    min_top_h = get_val(top_zone, total_h, False) or 432
                     ar = parse_ar(bot_zone.get("val", ""))
-                    if mode == "Equal Sizes":
-                        target_h = total_h // 2
-                        top_h = max(min_top_h, target_h)
+                    if chrome_val == "equal":
+                        top_h = total_h // 2
                         bot_h = total_h - top_h
                     else:
-                        top_h = min_top_h
+                        raw = str(chrome_val).strip()
+                        if "%" in raw:
+                            match = re.search(r"(\d+(\.\d+)?)", raw)
+                            pct = float(match.group(1)) if match else 50.0
+                            top_h = int(total_h * pct / 100.0)
+                        else:
+                            match = re.search(r"(\d+)", raw)
+                            top_h = int(match.group(1)) if match else (get_val(top_zone, total_h, False) or (total_h // 2))
                         bot_h = total_h - top_h
                     col_w = int(bot_h * ar)
                 elif "Height" in bot_stat and "Aspect Ratio" in top_stat:
-                    min_bot_h = get_val(bot_zone, total_h, False) or 432
                     ar = parse_ar(top_zone.get("val", ""))
-                    if mode == "Equal Sizes":
-                        target_h = total_h // 2
-                        bot_h = max(min_bot_h, target_h)
+                    if chrome_val == "equal":
+                        bot_h = total_h // 2
                         top_h = total_h - bot_h
                     else:
-                        bot_h = min_bot_h
+                        raw = str(chrome_val).strip()
+                        if "%" in raw:
+                            match = re.search(r"(\d+(\.\d+)?)", raw)
+                            pct = float(match.group(1)) if match else 50.0
+                            bot_h = int(total_h * pct / 100.0)
+                        else:
+                            match = re.search(r"(\d+)", raw)
+                            bot_h = int(match.group(1)) if match else (get_val(bot_zone, total_h, False) or (total_h // 2))
                         top_h = total_h - bot_h
                     col_w = int(top_h * ar)
                 elif "Height" in top_stat and "Height" in bot_stat:
@@ -1126,6 +1313,7 @@ class MainWindow(QMainWindow):
     def save_to_disk(self):
         zones_with_rects = self._get_current_zones_with_rects()
         self.layout_settings["media_profiles"] = self.media_profiles
+        self.layout_settings["chrome_sizes"] = self.chrome_sizes
         output_data = {
             "layout_settings": self.layout_settings,
             "zones": zones_with_rects

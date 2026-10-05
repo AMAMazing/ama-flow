@@ -1,5 +1,5 @@
 {
-  "active_preset": "L - Low PiP",
+  "active_preset": "L - Equal Split",
   "presets": {
     "Default": [
       {
@@ -86,6 +86,7 @@
         "pos": "Bottom-Left",
         "stat": "Aspect Ratio",
         "val": "16:9",
+        "split_mode": "Equal Sizes",
         "rect": {
           "x": 0,
           "y": 540,
@@ -98,6 +99,7 @@
         "pos": "Top-Left",
         "stat": "Height (px)",
         "val": "432",
+        "split_mode": "Equal Sizes",
         "rect": {
           "x": 0,
           "y": 0,
@@ -110,6 +112,7 @@
         "pos": "Right",
         "stat": "Fill (Any)",
         "val": "",
+        "split_mode": "Equal Sizes",
         "rect": {
           "x": 960,
           "y": 0,

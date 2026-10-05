@@ -5,69 +5,218 @@ import subprocess
 import win32gui
 from PyQt6.QtWidgets import (QApplication, QMainWindow, QWidget, QVBoxLayout, QHBoxLayout,
                              QPushButton, QLabel, QComboBox, QLineEdit, QScrollArea, QFrame, QDialog, QListWidget,
-                             QInputDialog, QMessageBox)
-from PyQt6.QtCore import Qt
-from PyQt6.QtGui import QPainter, QColor, QPen
+                             QInputDialog, QMessageBox, QGraphicsDropShadowEffect)
+from PyQt6.QtCore import Qt, QSize
+from PyQt6.QtGui import QPainter, QColor, QPen, QFont, QBrush
 
 CONFIG_PATH = os.path.join(os.path.dirname(__file__), "config.json")
 MAIN_SCRIPT = os.path.join(os.path.dirname(__file__), "main.py")
 
 STYLESHEET = """
-QMainWindow, QScrollArea, QWidget#scroll_content {
-    background-color: #09090b;
+QMainWindow {
+    background-color: #202020;
 }
-QFrame#glass {
-    background-color: rgba(255, 255, 255, 0.03);
+QWidget#central {
+    background-color: #202020;
+}
+QScrollArea, QWidget#scroll_content {
+    background-color: transparent;
+    border: none;
+}
+
+/* PowerToys Cards */
+QFrame#card {
+    background-color: #2b2b2b;
+    border: 1px solid rgba(255, 255, 255, 0.08);
+    border-radius: 8px;
+}
+QFrame#card:hover {
+    border: 1px solid rgba(255, 255, 255, 0.14);
+}
+
+QFrame#monitor_card {
+    background-color: #2b2b2b;
+    border: 1px solid rgba(255, 255, 255, 0.10);
+    border-radius: 8px;
+    padding: 6px 14px;
+}
+
+/* Typography */
+QLabel {
+    color: #ffffff;
+    font-family: 'Segoe UI Variable Text', 'Segoe UI', sans-serif;
+    font-size: 13px;
+}
+QLabel#section_title {
+    font-size: 16px;
+    font-weight: 600;
+    color: #ffffff;
+    padding-bottom: 2px;
+}
+QLabel#header_title {
+    font-size: 20px;
+    font-weight: 600;
+    color: #ffffff;
+}
+QLabel#subtitle {
+    font-size: 12px;
+    color: #9d9d9d;
+}
+QLabel#field_label {
+    font-size: 12px;
+    color: #a0a0a0;
+    font-weight: 500;
+}
+QLabel#zone_num {
+    background-color: rgba(255, 255, 255, 0.08);
+    color: #ffffff;
+    font-weight: 600;
+    font-size: 12px;
     border-radius: 12px;
-    border: 1px solid rgba(255, 255, 255, 0.1);
+    min-width: 24px;
+    max-width: 24px;
+    min-height: 24px;
+    max-height: 24px;
+    qproperty-alignment: AlignCenter;
 }
+
+/* Inputs & Dropdowns */
 QComboBox, QLineEdit {
-    background-color: rgba(0, 0, 0, 0.5);
-    border: 1px solid rgba(255, 255, 255, 0.1);
+    background-color: #1e1e1e;
+    border: 1px solid rgba(255, 255, 255, 0.12);
     border-radius: 6px;
-    padding: 10px;
-    color: #f4f4f5;
-    font-size: 14px;
+    padding: 6px 10px;
+    color: #ffffff;
+    font-size: 13px;
+    font-family: 'Segoe UI Variable Text', 'Segoe UI', sans-serif;
+}
+QComboBox:hover, QLineEdit:hover {
+    background-color: #242424;
+    border: 1px solid rgba(255, 255, 255, 0.20);
 }
 QComboBox:focus, QLineEdit:focus {
-    border: 1px solid #3b82f6;
+    background-color: #1e1e1e;
+    border: 1px solid #0078d4;
 }
-QComboBox::drop-down { border: none; }
+QComboBox::drop-down {
+    border: none;
+    width: 24px;
+}
+QComboBox::down-arrow {
+    image: none;
+    border-left: 4px solid transparent;
+    border-right: 4px solid transparent;
+    border-top: 5px solid #a0a0a0;
+    margin-right: 8px;
+}
 QComboBox QAbstractItemView {
-    background-color: #18181b;
-    color: white;
-    selection-background-color: #3b82f6;
+    background-color: #2b2b2b;
+    border: 1px solid rgba(255, 255, 255, 0.15);
     border-radius: 6px;
+    color: #ffffff;
+    selection-background-color: #0078d4;
+    selection-color: #ffffff;
+    padding: 4px;
+    outline: none;
 }
+
+/* Buttons */
 QPushButton {
-    background-color: rgba(255, 255, 255, 0.05);
-    color: #f4f4f5;
+    background-color: #323232;
+    color: #ffffff;
     border: 1px solid rgba(255, 255, 255, 0.1);
-    border-radius: 8px;
-    padding: 10px 16px;
-    font-size: 14px;
-    font-weight: bold;
+    border-radius: 6px;
+    padding: 6px 14px;
+    font-size: 13px;
+    font-weight: 500;
+    font-family: 'Segoe UI Variable Text', 'Segoe UI', sans-serif;
 }
-QPushButton:hover { background-color: rgba(255, 255, 255, 0.1); }
-QPushButton#primary { background-color: #3b82f6; border: none; }
-QPushButton#primary:hover { background-color: #2563eb; }
-QPushButton#danger { background-color: rgba(239, 68, 68, 0.2); border: 1px solid rgba(239, 68, 68, 0.3); color: #f87171; }
-QPushButton#danger:hover { background-color: rgba(239, 68, 68, 0.4); }
-QLabel { color: #f4f4f5; font-size: 14px; }
-QLabel#title { font-size: 28px; font-weight: 800; color: #ffffff; }
-QLabel#subtitle { font-size: 14px; color: #a1a1aa; }
-QDialog { background-color: #09090b; }
+QPushButton:hover {
+    background-color: #3c3c3c;
+    border: 1px solid rgba(255, 255, 255, 0.16);
+}
+QPushButton:pressed {
+    background-color: #292929;
+}
+
+QPushButton#primary {
+    background-color: #0078d4;
+    border: 1px solid #1084d9;
+    color: #ffffff;
+    font-weight: 600;
+}
+QPushButton#primary:hover {
+    background-color: #1084d9;
+    border: 1px solid #2993e3;
+}
+QPushButton#primary:pressed {
+    background-color: #006cbe;
+}
+
+QPushButton#danger {
+    background-color: transparent;
+    color: #a0a0a0;
+    border: 1px solid transparent;
+    border-radius: 6px;
+    font-size: 13px;
+    padding: 4px 8px;
+}
+QPushButton#danger:hover {
+    background-color: rgba(232, 17, 35, 0.15);
+    color: #f87171;
+    border: 1px solid rgba(232, 17, 35, 0.3);
+}
+
+QPushButton#secondary_action {
+    background-color: transparent;
+    border: 1px solid rgba(255, 255, 255, 0.12);
+}
+QPushButton#secondary_action:hover {
+    background-color: rgba(255, 255, 255, 0.06);
+}
+
+/* Dialog */
+QDialog {
+    background-color: #202020;
+}
 QListWidget {
-    background-color: rgba(0, 0, 0, 0.3);
-    border-radius: 8px;
-    padding: 8px;
-    color: #e0e0e0;
-    font-size: 14px;
+    background-color: #1e1e1e;
     border: 1px solid rgba(255, 255, 255, 0.1);
+    border-radius: 6px;
+    padding: 6px;
+    color: #ffffff;
+    font-size: 13px;
 }
-QListWidget::item { padding: 12px; border-radius: 6px; }
-QListWidget::item:hover { background-color: rgba(255, 255, 255, 0.05); }
-QListWidget::item:selected { background-color: #3b82f6; color: white; }
+QListWidget::item {
+    padding: 8px 10px;
+    border-radius: 4px;
+}
+QListWidget::item:hover {
+    background-color: rgba(255, 255, 255, 0.06);
+}
+QListWidget::item:selected {
+    background-color: #0078d4;
+    color: #ffffff;
+}
+
+/* ScrollBar */
+QScrollBar:vertical {
+    border: none;
+    background: transparent;
+    width: 8px;
+    margin: 0px;
+}
+QScrollBar::handle:vertical {
+    background: rgba(255, 255, 255, 0.2);
+    min-height: 25px;
+    border-radius: 4px;
+}
+QScrollBar::handle:vertical:hover {
+    background: rgba(255, 255, 255, 0.35);
+}
+QScrollBar::add-line:vertical, QScrollBar::sub-line:vertical {
+    height: 0px;
+}
 """
 
 class NoWheelComboBox(QComboBox):
@@ -94,19 +243,31 @@ class AppSelectDialog(QDialog):
     def __init__(self, parent):
         super().__init__(parent)
         self.setWindowTitle("Select Open Application")
-        self.setMinimumSize(400, 500)
+        self.setMinimumSize(420, 480)
         layout = QVBoxLayout(self)
-        
+        layout.setContentsMargins(20, 20, 20, 20)
+        layout.setSpacing(14)
+
+        lbl = QLabel("Choose a running window to assign to this zone:")
+        lbl.setObjectName("subtitle")
+        layout.addWidget(lbl)
+
         self.list = QListWidget()
         for w in get_open_windows():
             self.list.addItem(w)
         layout.addWidget(self.list)
-        
-        btn = QPushButton("Select")
-        btn.setObjectName("primary")
-        btn.clicked.connect(self.accept)
-        layout.addWidget(btn)
-        
+
+        btn_box = QHBoxLayout()
+        btn_box.addStretch()
+        btn_cancel = QPushButton("Cancel")
+        btn_cancel.clicked.connect(self.reject)
+        btn_select = QPushButton("Select Application")
+        btn_select.setObjectName("primary")
+        btn_select.clicked.connect(self.accept)
+        btn_box.addWidget(btn_cancel)
+        btn_box.addWidget(btn_select)
+        layout.addLayout(btn_box)
+
     def get_selected(self):
         if self.list.currentItem():
             return self.list.currentItem().text()
@@ -115,7 +276,7 @@ class AppSelectDialog(QDialog):
 class PreviewWidget(QWidget):
     def __init__(self):
         super().__init__()
-        self.setMinimumHeight(250)
+        self.setMinimumHeight(240)
         self.zones = []
         self.screen_rect = (1920, 1080)
 
@@ -131,84 +292,134 @@ class PreviewWidget(QWidget):
         w = self.width()
         h = self.height()
         sw, sh = self.screen_rect
-        if sw == 0 or sh == 0: return
+        if sw == 0 or sh == 0:
+            return
 
-        scale = min(w / sw, h / sh) * 0.9
+        scale = min((w - 40) / sw, (h - 30) / sh)
         pw = int(sw * scale)
         ph = int(sh * scale)
         px = (w - pw) // 2
         py = (h - ph) // 2
 
-        # Draw the target display resolution string at the top left of the widget
-        painter.setPen(QColor("#a1a1aa"))
-        painter.drawText(10, 20, f"Target Display: {sw}x{sh} px")
+        # Monitor Bezel (FancyZones style)
+        painter.setBrush(QColor("#181818"))
+        painter.setPen(QPen(QColor("#383838"), 1))
+        painter.drawRoundedRect(px - 6, py - 6, pw + 12, ph + 12, 8, 8)
 
-        painter.setBrush(QColor("#000000"))
-        painter.setPen(QPen(QColor("#3f3f46"), 4))
-        painter.drawRoundedRect(px - 4, py - 4, pw + 8, ph + 8, 8, 8)
-        
-        painter.setBrush(QColor("#18181b"))
+        # Monitor Screen Canvas
+        painter.setBrush(QColor("#242424"))
         painter.setPen(Qt.PenStyle.NoPen)
-        painter.drawRect(px, py, pw, ph)
+        painter.drawRoundedRect(px, py, pw, ph, 4, 4)
 
-        colors = ["#3b82f6", "#ef4444", "#10b981", "#f59e0b", "#8b5cf6", "#ec4899"]
-        
+        # Palette: refined muted PowerToys-like tones
+        palette = [
+            (QColor("#1e3a5f"), QColor("#3b82f6")),  # Blue
+            (QColor("#2d3748"), QColor("#818cf8")),  # Indigo/Slate
+            (QColor("#1e3f3b"), QColor("#10b981")),  # Teal
+            (QColor("#452e2e"), QColor("#f87171")),  # Rose
+            (QColor("#3f2d4f"), QColor("#c084fc")),  # Purple
+            (QColor("#423821"), QColor("#fbbf24")),  # Amber
+        ]
+
+        # Draw Zones
         for i, z in enumerate(self.zones):
             rect = z.get('rect')
-            if not rect: continue
-            
+            if not rect:
+                continue
+
             zx = px + int(rect['x'] * scale)
             zy = py + int(rect['y'] * scale)
             zw = int(rect['width'] * scale)
             zh = int(rect['height'] * scale)
 
-            c = QColor(colors[i % len(colors)])
-            c.setAlpha(80)
-            painter.setBrush(c)
-            c.setAlpha(255)
-            painter.setPen(QPen(c, 2))
-            painter.drawRect(zx, zy, zw, zh)
-            
+            fill_c, border_c = palette[i % len(palette)]
+
+            # Inset slightly for zone separation like FancyZones
+            gap = 2
+            rx = zx + gap
+            ry = zy + gap
+            rw = max(1, zw - gap * 2)
+            rh = max(1, zh - gap * 2)
+
+            painter.setBrush(fill_c)
+            painter.setPen(QPen(border_c, 1.5))
+            painter.drawRoundedRect(rx, ry, rw, rh, 4, 4)
+
+            # Zone number badge top-left
+            painter.setPen(Qt.PenStyle.NoPen)
+            painter.setBrush(QColor(0, 0, 0, 140))
+            painter.drawRoundedRect(rx + 6, ry + 6, 20, 18, 3, 3)
             painter.setPen(QColor("#ffffff"))
+            font_small = QFont("Segoe UI", 8, QFont.Weight.Bold)
+            painter.setFont(font_small)
+            painter.drawText(rx + 6, ry + 6, 20, 18, Qt.AlignmentFlag.AlignCenter, str(i + 1))
+
+            # Title and dimension text
             title = z.get('window_title', '')
-            
-            # Show exact pixel dimensions
             real_w, real_h = int(rect['width']), int(rect['height'])
-            display_text = f"{title}\n{real_w}x{real_h} px"
-            
-            painter.drawText(zx, zy, zw, zh, Qt.AlignmentFlag.AlignCenter, display_text)
+            display_text = f"{title}\n{real_w} × {real_h} px"
+
+            font_body = QFont("Segoe UI", 9, QFont.Weight.DemiBold)
+            painter.setFont(font_body)
+            painter.setPen(QColor("#ffffff"))
+            painter.drawText(rx + 10, ry + 10, rw - 20, rh - 20, Qt.AlignmentFlag.AlignCenter, display_text)
 
 class ZoneRow(QFrame):
-    def __init__(self, parent, delete_callback, change_callback, initial_data=None):
+    def __init__(self, parent, delete_callback, change_callback, index=1, initial_data=None):
         super().__init__(parent)
-        self.setObjectName("glass")
+        self.setObjectName("card")
         self.delete_callback = delete_callback
         self.change_callback = change_callback
-        
+        self.index = index
+
         layout = QVBoxLayout(self)
-        layout.setContentsMargins(15, 15, 15, 15)
-        layout.setSpacing(10)
-        
-        row1 = QHBoxLayout()
-        self.btn_select = QPushButton("Pick Open App")
-        self.btn_select.clicked.connect(self.select_app)
+        layout.setContentsMargins(14, 12, 14, 12)
+        layout.setSpacing(8)
+
+        # Header Row: Zone Number Badge, App Name/Input, Pick App Button, Delete Button
+        top_row = QHBoxLayout()
+        top_row.setSpacing(10)
+
+        self.num_badge = QLabel(str(self.index))
+        self.num_badge.setObjectName("zone_num")
+        top_row.addWidget(self.num_badge)
+
         self.app_match = QLineEdit()
-        self.app_match.setPlaceholderText("Window Title Substring (e.g. 'Netflix' or 'Code')")
-        btn_del = QPushButton("X")
+        self.app_match.setPlaceholderText("Window Title Substring (e.g. Chrome, Visual Studio Code)")
+        top_row.addWidget(self.app_match, 1)
+
+        self.btn_select = QPushButton("Pick App...")
+        self.btn_select.setObjectName("secondary_action")
+        self.btn_select.clicked.connect(self.select_app)
+        top_row.addWidget(self.btn_select)
+
+        btn_del = QPushButton("✕")
         btn_del.setObjectName("danger")
-        btn_del.setFixedWidth(40)
+        btn_del.setToolTip("Delete this zone")
+        btn_del.setFixedWidth(32)
         btn_del.clicked.connect(lambda: self.delete_callback(self))
-        
-        row1.addWidget(self.btn_select)
-        row1.addWidget(self.app_match, 1)
-        row1.addWidget(btn_del)
-        
-        row2 = QHBoxLayout()
+        top_row.addWidget(btn_del)
+
+        layout.addLayout(top_row)
+
+        # Rules / Placement Controls Row
+        bot_row = QHBoxLayout()
+        bot_row.setSpacing(10)
+
+        lbl_loc = QLabel("Location:")
+        lbl_loc.setObjectName("field_label")
+        bot_row.addWidget(lbl_loc)
+
         self.pos_combo = NoWheelComboBox()
         self.pos_combo.addItems(["Left", "Right", "Top", "Bottom", "Top-Left", "Bottom-Left", "Top-Right", "Bottom-Right", "Fill Space"])
-        self.pos_combo.setMinimumWidth(150)
+        self.pos_combo.setMinimumWidth(130)
         self.pos_combo.currentTextChanged.connect(self.on_pos_changed)
-        
+        bot_row.addWidget(self.pos_combo)
+
+        lbl_rule = QLabel("Rule:")
+        lbl_rule.setObjectName("field_label")
+        bot_row.addWidget(lbl_rule)
+
         self.rule_combo = NoWheelComboBox()
         self.rule_combo.addItems([
             "Fill (Any)",
@@ -221,29 +432,24 @@ class ZoneRow(QFrame):
             "Height (%)",
             "Width (%)"
         ])
-        self.rule_combo.setMinimumWidth(150)
+        self.rule_combo.setMinimumWidth(160)
         self.rule_combo.currentTextChanged.connect(self.on_rule_changed)
-        
+        bot_row.addWidget(self.rule_combo)
+
         self.val_input = QLineEdit()
         self.val_input.setPlaceholderText("Value (e.g. 16:9 or 432)")
-        self.val_input.setMinimumWidth(150)
-        
-        row2.addWidget(QLabel("Location:"))
-        row2.addWidget(self.pos_combo)
-        row2.addWidget(QLabel(" Rule:"))
-        row2.addWidget(self.rule_combo)
-        row2.addWidget(self.val_input)
-        row2.addStretch()
-        
-        layout.addLayout(row1)
-        layout.addLayout(row2)
-        
+        self.val_input.setMinimumWidth(140)
+        bot_row.addWidget(self.val_input)
+
+        bot_row.addStretch()
+        layout.addLayout(bot_row)
+
         if initial_data:
             self.app_match.setText(initial_data.get("window_title", ""))
             self.pos_combo.setCurrentText(initial_data.get("pos", "Left"))
             self.rule_combo.setCurrentText(initial_data.get("stat", "Fill (Any)"))
             self.val_input.setText(initial_data.get("val", ""))
-            
+
         self.update_visibility()
         self._initialized = True
 
@@ -251,6 +457,10 @@ class ZoneRow(QFrame):
         self.pos_combo.currentTextChanged.connect(lambda _: self.trigger_change())
         self.rule_combo.currentTextChanged.connect(lambda _: self.trigger_change())
         self.val_input.textChanged.connect(lambda _: self.trigger_change())
+
+    def set_index(self, idx):
+        self.index = idx
+        self.num_badge.setText(str(idx))
 
     def update_visibility(self):
         is_fill = (self.pos_combo.currentText() == "Fill Space" or self.rule_combo.currentText() == "Fill (Any)")
@@ -288,61 +498,113 @@ class ZoneRow(QFrame):
 class MainWindow(QMainWindow):
     def __init__(self):
         super().__init__()
-        self.setWindowTitle("AppZones - Minimalist Auto-Layout")
-        self.resize(800, 800)
+        self.setWindowTitle("AppZones - FancyZones Auto-Layout")
+        self.resize(880, 840)
         self.setStyleSheet(STYLESHEET)
-        
+
         self.rows = []
         self.presets = {}
         self.preset_modes = {}
         self.active_preset = "Default"
-        
+
         self.init_ui()
         self.load_config()
-        
+
     def init_ui(self):
         central = QWidget()
+        central.setObjectName("central")
         self.setCentralWidget(central)
         main_layout = QVBoxLayout(central)
-        main_layout.setContentsMargins(30, 30, 30, 30)
-        main_layout.setSpacing(20)
+        main_layout.setContentsMargins(24, 20, 24, 20)
+        main_layout.setSpacing(16)
+
+        # Header Area with PowerToys-style Monitor Display Card
+        header = QHBoxLayout()
         
-        header = QVBoxLayout()
-        title = QLabel("AppZones"); title.setObjectName("title")
-        sub = QLabel("1 Rule Per App. The solver calculates the exact pixel placements for you."); sub.setObjectName("subtitle")
-        header.addWidget(title)
-        header.addWidget(sub)
+        titles_box = QVBoxLayout()
+        titles_box.setSpacing(2)
+        title = QLabel("AppZones")
+        title.setObjectName("header_title")
+        sub = QLabel("Automated PowerToys window placement solver")
+        sub.setObjectName("subtitle")
+        titles_box.addWidget(title)
+        titles_box.addWidget(sub)
+        header.addLayout(titles_box)
+
+        header.addStretch()
+
+        # Monitor Card (FancyZones style)
+        self.monitor_card = QFrame()
+        self.monitor_card.setObjectName("monitor_card")
+        mon_layout = QVBoxLayout(self.monitor_card)
+        mon_layout.setContentsMargins(12, 6, 12, 6)
+        mon_layout.setSpacing(2)
+        
+        self.mon_num_label = QLabel("Display 1")
+        self.mon_num_label.setFont(QFont("Segoe UI", 10, QFont.Weight.DemiBold))
+        self.mon_num_label.setAlignment(Qt.AlignmentFlag.AlignCenter)
+        
+        screen = self.screen().geometry()
+        self.mon_res_label = QLabel(f"{screen.width()} × {screen.height()}")
+        self.mon_res_label.setObjectName("subtitle")
+        self.mon_res_label.setAlignment(Qt.AlignmentFlag.AlignCenter)
+
+        mon_layout.addWidget(self.mon_num_label)
+        mon_layout.addWidget(self.mon_res_label)
+        header.addWidget(self.monitor_card)
+
         main_layout.addLayout(header)
-        
-        # PRESETS BAR
-        preset_layout = QHBoxLayout()
-        preset_layout.addWidget(QLabel("Preset:"))
-        
+
+        # Presets Bar Card
+        preset_card = QFrame()
+        preset_card.setObjectName("card")
+        preset_layout = QHBoxLayout(preset_card)
+        preset_layout.setContentsMargins(14, 10, 14, 10)
+        preset_layout.setSpacing(12)
+
+        lbl_preset = QLabel("Preset:")
+        lbl_preset.setObjectName("field_label")
+        preset_layout.addWidget(lbl_preset)
+
         self.preset_combo = QComboBox()
+        self.preset_combo.setMinimumWidth(160)
         self.preset_combo.currentTextChanged.connect(self.on_preset_changed)
         preset_layout.addWidget(self.preset_combo, 1)
-        
-        preset_layout.addSpacing(15)
-        preset_layout.addWidget(QLabel("Corner Sizing:"))
+
+        lbl_split = QLabel("Corner Sizing:")
+        lbl_split.setObjectName("field_label")
+        preset_layout.addWidget(lbl_split)
+
         self.split_combo = NoWheelComboBox()
         self.split_combo.addItems(["Maximize Size", "Equal Sizes"])
-        self.split_combo.setToolTip("Maximize Size: Aspect Ratio app gets max possible space, leaving companion at minimum height (e.g. 432px).\nEqual Sizes: Both apps split column height equally (~540px each).")
+        self.split_combo.setToolTip("Maximize Size: Aspect Ratio app gets max possible space.\nEqual Sizes: Both apps split column height equally.")
         self.split_combo.currentTextChanged.connect(lambda _: self.on_split_mode_changed())
         preset_layout.addWidget(self.split_combo)
-        
+
         btn_save = QPushButton("Save As...")
+        btn_save.setObjectName("secondary_action")
         btn_save.clicked.connect(self.save_preset_as)
         preset_layout.addWidget(btn_save)
-        
+
         btn_delete = QPushButton("Delete")
         btn_delete.setObjectName("danger")
         btn_delete.clicked.connect(self.delete_preset)
         preset_layout.addWidget(btn_delete)
-        
-        main_layout.addLayout(preset_layout)
-        
+
+        main_layout.addWidget(preset_card)
+
+        # Section: Layout Preview
+        lbl_preview = QLabel("Layout Preview")
+        lbl_preview.setObjectName("section_title")
+        main_layout.addWidget(lbl_preview)
+
         self.preview = PreviewWidget()
         main_layout.addWidget(self.preview)
+
+        # Section: Zones Configuration
+        lbl_zones = QLabel("Zone Rules")
+        lbl_zones.setObjectName("section_title")
+        main_layout.addWidget(lbl_zones)
 
         scroll = QScrollArea()
         scroll.setWidgetResizable(True)
@@ -351,19 +613,26 @@ class MainWindow(QMainWindow):
         self.scroll_content.setObjectName("scroll_content")
         self.rows_layout = QVBoxLayout(self.scroll_content)
         self.rows_layout.setAlignment(Qt.AlignmentFlag.AlignTop)
-        self.rows_layout.setSpacing(15)
+        self.rows_layout.setSpacing(10)
+        self.rows_layout.setContentsMargins(0, 0, 0, 0)
         scroll.setWidget(self.scroll_content)
-        main_layout.addWidget(scroll)
-        
+        main_layout.addWidget(scroll, 1)
+
+        # Bottom Bar
         footer = QHBoxLayout()
-        btn_add = QPushButton("+ Add App")
+        footer.setSpacing(12)
+
+        btn_add = QPushButton("+ Add Zone")
+        btn_add.setObjectName("secondary_action")
+        btn_add.setMinimumHeight(38)
         btn_add.clicked.connect(lambda: self.add_row())
-        
-        btn_apply = QPushButton("Calculate & Snap Layout")
+
+        btn_apply = QPushButton("Apply Layout")
         btn_apply.setObjectName("primary")
-        btn_apply.setMinimumHeight(45)
+        btn_apply.setMinimumHeight(38)
+        btn_apply.setMinimumWidth(160)
         btn_apply.clicked.connect(self.apply_layout)
-        
+
         footer.addWidget(btn_add)
         footer.addStretch()
         footer.addWidget(btn_apply)
@@ -374,7 +643,7 @@ class MainWindow(QMainWindow):
         self.presets = {"Default": []}
         self.preset_modes = {}
         self.active_preset = "Default"
-        
+
         if os.path.exists(CONFIG_PATH):
             try:
                 with open(CONFIG_PATH, "r", encoding="utf-8") as f:
@@ -388,7 +657,7 @@ class MainWindow(QMainWindow):
                         self.presets["Default"] = config["zones"]
                         loaded = True
             except: pass
-            
+
         if not loaded or not self.presets.get(self.active_preset):
             self.presets["Default"] = [
                 {"window_title": "Code", "pos": "Fill Space", "stat": "Fill (Any)", "val": ""},
@@ -397,7 +666,7 @@ class MainWindow(QMainWindow):
             ]
             self.active_preset = "Default"
             self.preset_modes["Default"] = "Equal Sizes"
-            
+
         self.populate_presets()
 
     def populate_presets(self):
@@ -414,7 +683,7 @@ class MainWindow(QMainWindow):
             self.rows_layout.removeWidget(row)
             row.deleteLater()
         self.rows.clear()
-        
+
         zones = self.presets.get(name, [])
         mode = self.preset_modes.get(name)
         if not mode and zones and isinstance(zones, list) and len(zones) > 0:
@@ -428,7 +697,7 @@ class MainWindow(QMainWindow):
 
         for z in zones:
             self.add_row(z)
-            
+
         self.update_preview()
 
     def on_preset_changed(self, name):
@@ -451,7 +720,7 @@ class MainWindow(QMainWindow):
             if data["window_title"]:
                 data["split_mode"] = mode
                 zones_data.append(data)
-                
+
         screen = self.screen().geometry()
         return self.calculate_rects(zones_data, screen.width(), screen.height(), split_mode=mode)
 
@@ -462,26 +731,26 @@ class MainWindow(QMainWindow):
             self.active_preset = name
             self.preset_modes[name] = self.split_combo.currentText()
             self.presets[name] = self._get_current_zones_with_rects()
-            
+
             if self.preset_combo.findText(name) == -1:
                 self.preset_combo.blockSignals(True)
                 self.preset_combo.addItem(name)
                 self.preset_combo.blockSignals(False)
-                
+
             self.preset_combo.blockSignals(True)
             self.preset_combo.setCurrentText(name)
             self.preset_combo.blockSignals(False)
-            
+
             self.save_to_disk()
 
     def delete_preset(self):
         if len(self.presets) <= 1:
             QMessageBox.warning(self, "Cannot Delete", "You must have at least one preset.")
             return
-            
+
         reply = QMessageBox.question(self, "Delete Preset", f"Are you sure you want to delete '{self.active_preset}'?",
                                      QMessageBox.StandardButton.Yes | QMessageBox.StandardButton.No)
-        
+
         if reply == QMessageBox.StandardButton.Yes:
             del self.presets[self.active_preset]
             if self.active_preset in self.preset_modes:
@@ -500,7 +769,8 @@ class MainWindow(QMainWindow):
             }, f, indent=2)
 
     def add_row(self, data=None):
-        row = ZoneRow(self.scroll_content, self.delete_row, self.update_preview, data)
+        idx = len(self.rows) + 1
+        row = ZoneRow(self.scroll_content, self.delete_row, self.update_preview, index=idx, initial_data=data)
         self.rows.append(row)
         self.rows_layout.addWidget(row)
         self.update_preview()
@@ -509,6 +779,8 @@ class MainWindow(QMainWindow):
         if row in self.rows:
             self.rows.remove(row)
             row.deleteLater()
+            for i, r in enumerate(self.rows):
+                r.set_index(i + 1)
             self.update_preview()
 
     def update_preview(self):
@@ -520,7 +792,7 @@ class MainWindow(QMainWindow):
                 data["window_title"] = "Empty"
             data["split_mode"] = mode
             zones_data.append(data)
-            
+
         screen = self.screen().geometry()
         zones_data = self.calculate_rects(zones_data, screen.width(), screen.height(), split_mode=mode)
         self.preview.update_zones(zones_data, screen)
@@ -555,14 +827,14 @@ class MainWindow(QMainWindow):
             pos = z.get('pos', '')
             if is_fill(z) or pos in ["Top-Left", "Bottom-Left", "Top-Right", "Bottom-Right"]:
                 continue
-            
+
             stat = z.get('stat', '')
             if pos in ["Right", "Left"]:
                 if "Aspect Ratio" in stat:
                     w = int(rem_h * parse_ar(z.get('val', '')))
                 else:
                     w = get_val(z, rem_w, True) or (rem_w // 2)
-                
+
                 w = max(0, min(w, rem_w))
                 if pos == "Right":
                     z['rect'] = {"x": rem_x + rem_w - w, "y": rem_y, "width": w, "height": rem_h}
@@ -571,13 +843,13 @@ class MainWindow(QMainWindow):
                     z['rect'] = {"x": rem_x, "y": rem_y, "width": w, "height": rem_h}
                     rem_x += w
                     rem_w -= w
-                    
+
             elif pos in ["Top", "Bottom"]:
                 if "Aspect Ratio" in stat:
                     h = int(rem_w / parse_ar(z.get('val', '')))
                 else:
                     h = get_val(z, rem_h, False) or (rem_h // 2)
-                    
+
                 h = max(0, min(h, rem_h))
                 if pos == "Top":
                     z['rect'] = {"x": rem_x, "y": rem_y, "width": rem_w, "height": h}
@@ -592,7 +864,6 @@ class MainWindow(QMainWindow):
             if not top_zone and not bot_zone:
                 return 0
 
-            # Determine heights and column width
             top_h, bot_h, col_w = 0, 0, 0
 
             if top_zone and bot_zone:
@@ -605,7 +876,6 @@ class MainWindow(QMainWindow):
                     if "Max" in stat: return "Maximize Size"
                     return ar_zone.get('split_mode', split_mode)
 
-                # Case: One specifies Height/Min Height and the other specifies Aspect Ratio
                 if "Height" in top_stat and "Aspect Ratio" in bot_stat:
                     min_top_h = get_val(top_zone, total_h, False)
                     min_top_h = max(0, min(min_top_h, total_h))
@@ -704,7 +974,7 @@ class MainWindow(QMainWindow):
     def apply_layout(self):
         self.presets[self.active_preset] = self._get_current_zones_with_rects()
         self.save_to_disk()
-            
+
         try:
             subprocess.Popen([sys.executable, MAIN_SCRIPT], shell=False)
         except Exception as e:

@@ -210,12 +210,22 @@ class ZoneRow(QFrame):
         self.pos_combo.currentTextChanged.connect(self.on_pos_changed)
         
         self.rule_combo = NoWheelComboBox()
-        self.rule_combo.addItems(["Fill (Any)", "Aspect Ratio", "Width (px)", "Height (px)", "Width (%)", "Height (%)"])
+        self.rule_combo.addItems([
+            "Fill (Any)",
+            "Aspect Ratio",
+            "Aspect Ratio (Maximize)",
+            "Aspect Ratio (Equal)",
+            "Min Height (px)",
+            "Height (px)",
+            "Width (px)",
+            "Height (%)",
+            "Width (%)"
+        ])
         self.rule_combo.setMinimumWidth(150)
         self.rule_combo.currentTextChanged.connect(self.on_rule_changed)
         
         self.val_input = QLineEdit()
-        self.val_input.setPlaceholderText("Value (e.g. 16:9 or 40)")
+        self.val_input.setPlaceholderText("Value (e.g. 16:9 or 432)")
         self.val_input.setMinimumWidth(150)
         
         row2.addWidget(QLabel("Location:"))
@@ -239,6 +249,7 @@ class ZoneRow(QFrame):
 
         self.app_match.textChanged.connect(lambda _: self.trigger_change())
         self.pos_combo.currentTextChanged.connect(lambda _: self.trigger_change())
+        self.rule_combo.currentTextChanged.connect(lambda _: self.trigger_change())
         self.val_input.textChanged.connect(lambda _: self.trigger_change())
 
     def update_visibility(self):
@@ -283,6 +294,7 @@ class MainWindow(QMainWindow):
         
         self.rows = []
         self.presets = {}
+        self.preset_modes = {}
         self.active_preset = "Default"
         
         self.init_ui()
@@ -309,6 +321,14 @@ class MainWindow(QMainWindow):
         self.preset_combo = QComboBox()
         self.preset_combo.currentTextChanged.connect(self.on_preset_changed)
         preset_layout.addWidget(self.preset_combo, 1)
+        
+        preset_layout.addSpacing(15)
+        preset_layout.addWidget(QLabel("Corner Sizing:"))
+        self.split_combo = NoWheelComboBox()
+        self.split_combo.addItems(["Maximize Size", "Equal Sizes"])
+        self.split_combo.setToolTip("Maximize Size: Aspect Ratio app gets max possible space, leaving companion at minimum height (e.g. 432px).\nEqual Sizes: Both apps split column height equally (~540px each).")
+        self.split_combo.currentTextChanged.connect(lambda _: self.on_split_mode_changed())
+        preset_layout.addWidget(self.split_combo)
         
         btn_save = QPushButton("Save As...")
         btn_save.clicked.connect(self.save_preset_as)
@@ -352,6 +372,7 @@ class MainWindow(QMainWindow):
     def load_config(self):
         loaded = False
         self.presets = {"Default": []}
+        self.preset_modes = {}
         self.active_preset = "Default"
         
         if os.path.exists(CONFIG_PATH):
@@ -361,6 +382,7 @@ class MainWindow(QMainWindow):
                     if "presets" in config:
                         self.presets = config["presets"]
                         self.active_preset = config.get("active_preset", "Default")
+                        self.preset_modes = config.get("preset_modes", {})
                         loaded = True
                     elif "zones" in config:
                         self.presets["Default"] = config["zones"]
@@ -374,6 +396,7 @@ class MainWindow(QMainWindow):
                 {"window_title": "Chrome", "pos": "Top-Left", "stat": "Height (px)", "val": "432"}
             ]
             self.active_preset = "Default"
+            self.preset_modes["Default"] = "Equal Sizes"
             
         self.populate_presets()
 
@@ -393,6 +416,16 @@ class MainWindow(QMainWindow):
         self.rows.clear()
         
         zones = self.presets.get(name, [])
+        mode = self.preset_modes.get(name)
+        if not mode and zones and isinstance(zones, list) and len(zones) > 0:
+            mode = zones[0].get("split_mode")
+        if not mode:
+            mode = "Maximize Size" if "PiP" in name else "Equal Sizes"
+
+        self.split_combo.blockSignals(True)
+        self.split_combo.setCurrentText(mode)
+        self.split_combo.blockSignals(False)
+
         for z in zones:
             self.add_row(z)
             
@@ -403,21 +436,31 @@ class MainWindow(QMainWindow):
             self.active_preset = name
             self.load_preset(name)
 
+    def on_split_mode_changed(self):
+        mode = self.split_combo.currentText()
+        self.preset_modes[self.active_preset] = mode
+        self.presets[self.active_preset] = self._get_current_zones_with_rects()
+        self.save_to_disk()
+        self.update_preview()
+
     def _get_current_zones_with_rects(self):
         zones_data = []
+        mode = self.split_combo.currentText()
         for row in self.rows:
             data = row.get_data()
             if data["window_title"]:
+                data["split_mode"] = mode
                 zones_data.append(data)
                 
         screen = self.screen().geometry()
-        return self.calculate_rects(zones_data, screen.width(), screen.height())
+        return self.calculate_rects(zones_data, screen.width(), screen.height(), split_mode=mode)
 
     def save_preset_as(self):
         name, ok = QInputDialog.getText(self, "Save Preset", "Preset Name:", text=self.active_preset)
         if ok and name.strip():
             name = name.strip()
             self.active_preset = name
+            self.preset_modes[name] = self.split_combo.currentText()
             self.presets[name] = self._get_current_zones_with_rects()
             
             if self.preset_combo.findText(name) == -1:
@@ -441,13 +484,20 @@ class MainWindow(QMainWindow):
         
         if reply == QMessageBox.StandardButton.Yes:
             del self.presets[self.active_preset]
+            if self.active_preset in self.preset_modes:
+                del self.preset_modes[self.active_preset]
             self.active_preset = list(self.presets.keys())[0]
             self.populate_presets()
             self.save_to_disk()
 
     def save_to_disk(self):
+        self.preset_modes[self.active_preset] = self.split_combo.currentText()
         with open(CONFIG_PATH, "w", encoding="utf-8") as f:
-            json.dump({"active_preset": self.active_preset, "presets": self.presets}, f, indent=2)
+            json.dump({
+                "active_preset": self.active_preset,
+                "presets": self.presets,
+                "preset_modes": self.preset_modes
+            }, f, indent=2)
 
     def add_row(self, data=None):
         row = ZoneRow(self.scroll_content, self.delete_row, self.update_preview, data)
@@ -463,17 +513,19 @@ class MainWindow(QMainWindow):
 
     def update_preview(self):
         zones_data = []
+        mode = self.split_combo.currentText()
         for row in self.rows:
             data = row.get_data()
             if not data["window_title"]:
                 data["window_title"] = "Empty"
+            data["split_mode"] = mode
             zones_data.append(data)
             
         screen = self.screen().geometry()
-        zones_data = self.calculate_rects(zones_data, screen.width(), screen.height())
+        zones_data = self.calculate_rects(zones_data, screen.width(), screen.height(), split_mode=mode)
         self.preview.update_zones(zones_data, screen)
 
-    def calculate_rects(self, zones, screen_w, screen_h):
+    def calculate_rects(self, zones, screen_w, screen_h, split_mode="Maximize Size"):
         rem_x, rem_y, rem_w, rem_h = 0, 0, screen_w, screen_h
 
         def get_val(z, max_val, is_width=True):
@@ -481,9 +533,9 @@ class MainWindow(QMainWindow):
             val = z.get('val', '0')
             try:
                 if stat == "Width (px)" and is_width: return int(val)
-                if stat == "Height (px)" and not is_width: return int(val)
+                if stat in ["Height (px)", "Min Height (px)"] and not is_width: return int(val)
                 if stat == "Width (%)" and is_width: return int(max_val * float(val) / 100.0)
-                if stat == "Height (%)" and not is_width: return int(max_val * float(val) / 100.0)
+                if stat in ["Height (%)", "Min Height (%)"] and not is_width: return int(max_val * float(val) / 100.0)
             except: pass
             return 0
 
@@ -506,7 +558,7 @@ class MainWindow(QMainWindow):
             
             stat = z.get('stat', '')
             if pos in ["Right", "Left"]:
-                if stat == "Aspect Ratio":
+                if "Aspect Ratio" in stat:
                     w = int(rem_h * parse_ar(z.get('val', '')))
                 else:
                     w = get_val(z, rem_w, True) or (rem_w // 2)
@@ -521,7 +573,7 @@ class MainWindow(QMainWindow):
                     rem_w -= w
                     
             elif pos in ["Top", "Bottom"]:
-                if stat == "Aspect Ratio":
+                if "Aspect Ratio" in stat:
                     h = int(rem_w / parse_ar(z.get('val', '')))
                 else:
                     h = get_val(z, rem_h, False) or (rem_h // 2)
@@ -547,24 +599,44 @@ class MainWindow(QMainWindow):
                 top_stat = top_zone.get('stat', '')
                 bot_stat = bot_zone.get('stat', '')
 
-                # Case: One specifies Height and the other specifies Aspect Ratio
-                if "Height" in top_stat and bot_stat == "Aspect Ratio":
-                    top_h = get_val(top_zone, total_h, False)
-                    top_h = max(0, min(top_h, total_h))
-                    bot_h = total_h - top_h
+                def get_mode(ar_zone):
+                    stat = ar_zone.get('stat', '')
+                    if "Equal" in stat: return "Equal Sizes"
+                    if "Max" in stat: return "Maximize Size"
+                    return ar_zone.get('split_mode', split_mode)
+
+                # Case: One specifies Height/Min Height and the other specifies Aspect Ratio
+                if "Height" in top_stat and "Aspect Ratio" in bot_stat:
+                    min_top_h = get_val(top_zone, total_h, False)
+                    min_top_h = max(0, min(min_top_h, total_h))
                     ar = parse_ar(bot_zone.get('val', ''))
+                    mode = get_mode(bot_zone)
+                    if mode == "Equal Sizes":
+                        target_h = total_h // 2
+                        top_h = max(min_top_h, target_h)
+                        bot_h = total_h - top_h
+                    else:
+                        top_h = min_top_h
+                        bot_h = total_h - top_h
                     col_w = int(bot_h * ar)
-                elif "Height" in bot_stat and top_stat == "Aspect Ratio":
-                    bot_h = get_val(bot_zone, total_h, False)
-                    bot_h = max(0, min(bot_h, total_h))
-                    top_h = total_h - bot_h
+                elif "Height" in bot_stat and "Aspect Ratio" in top_stat:
+                    min_bot_h = get_val(bot_zone, total_h, False)
+                    min_bot_h = max(0, min(min_bot_h, total_h))
                     ar = parse_ar(top_zone.get('val', ''))
+                    mode = get_mode(top_zone)
+                    if mode == "Equal Sizes":
+                        target_h = total_h // 2
+                        bot_h = max(min_bot_h, target_h)
+                        top_h = total_h - bot_h
+                    else:
+                        bot_h = min_bot_h
+                        top_h = total_h - bot_h
                     col_w = int(top_h * ar)
                 elif "Height" in top_stat and "Height" in bot_stat:
                     top_h = get_val(top_zone, total_h, False)
                     bot_h = get_val(bot_zone, total_h, False)
                     col_w = max(get_val(top_zone, total_w, True), get_val(bot_zone, total_w, True)) or (total_w // 2)
-                elif top_stat == "Aspect Ratio" and bot_stat == "Aspect Ratio":
+                elif "Aspect Ratio" in top_stat and "Aspect Ratio" in bot_stat:
                     top_h = total_h // 2
                     bot_h = total_h - top_h
                     ar_top = parse_ar(top_zone.get('val', ''))
@@ -576,7 +648,7 @@ class MainWindow(QMainWindow):
                     col_w = max(get_val(top_zone, total_w, True), get_val(bot_zone, total_w, True)) or (total_w // 2)
             elif top_zone:
                 top_stat = top_zone.get('stat', '')
-                if top_stat == "Aspect Ratio":
+                if "Aspect Ratio" in top_stat:
                     top_h = total_h
                     col_w = int(top_h * parse_ar(top_zone.get('val', '')))
                 else:
@@ -584,7 +656,7 @@ class MainWindow(QMainWindow):
                     col_w = get_val(top_zone, total_w, True) or (total_w // 2)
             elif bot_zone:
                 bot_stat = bot_zone.get('stat', '')
-                if bot_stat == "Aspect Ratio":
+                if "Aspect Ratio" in bot_stat:
                     bot_h = total_h
                     col_w = int(bot_h * parse_ar(bot_zone.get('val', '')))
                 else:

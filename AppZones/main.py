@@ -44,7 +44,11 @@ def main():
     # Support new preset schema while maintaining backwards compatibility
     if "presets" in config and "active_preset" in config:
         active = config["active_preset"]
-        zones = config["presets"].get(active, [])
+        preset_data = config["presets"].get(active, [])
+        if isinstance(preset_data, dict):
+            zones = preset_data.get("zones", [])
+        else:
+            zones = preset_data
     else:
         zones = config.get("zones", [])
     

@@ -1,8 +1,8 @@
 {
   "layout_settings": {
     "vscode_side": "Right",
-    "chrome_sizing": "590px",
-    "active_media_profile": "MYAEW (3:2)",
+    "chrome_sizing": "432px",
+    "active_media_profile": "App (1.68:1)",
     "chrome_sizes": {
       "Equal Size": "equal",
       "432px": "432",
@@ -19,16 +19,16 @@
   },
   "zones": [
     {
-      "window_title": "MYAEW",
+      "window_title": "Home \u2013 Netflix",
       "role": "media",
       "pos": "Bottom-Left",
       "stat": "Aspect Ratio",
-      "val": "3:2",
+      "val": "1.68:1",
       "rect": {
         "x": 0,
-        "y": 590,
-        "width": 735,
-        "height": 490
+        "y": 432,
+        "width": 1088,
+        "height": 648
       }
     },
     {
@@ -36,12 +36,12 @@
       "role": "chrome",
       "pos": "Top-Left",
       "stat": "Height (px)",
-      "val": "590",
+      "val": "432",
       "rect": {
         "x": 0,
         "y": 0,
-        "width": 735,
-        "height": 590
+        "width": 1088,
+        "height": 432
       }
     },
     {
@@ -51,9 +51,9 @@
       "stat": "Fill (Any)",
       "val": "",
       "rect": {
-        "x": 735,
+        "x": 1088,
         "y": 0,
-        "width": 1185,
+        "width": 832,
         "height": 1080
       }
     }

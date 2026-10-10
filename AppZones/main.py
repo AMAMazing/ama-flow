@@ -1,15 +1,33 @@
+import sys
 import json
 import os
 import win32gui
 import win32con
 import ctypes
 from ctypes import wintypes
+import subprocess
+import signal
+
+from PyQt6.QtWidgets import QApplication, QWidget
+from PyQt6.QtCore import Qt, QTimer, QRect, QObject, QAbstractNativeEventFilter
+from PyQt6.QtGui import QPainter, QColor, QPen, QCursor
 
 class RECT(ctypes.Structure):
     _fields_ = [('left', wintypes.LONG), 
                 ('top', wintypes.LONG), 
                 ('right', wintypes.LONG), 
                 ('bottom', wintypes.LONG)]
+
+WINEVENTPROC = ctypes.WINFUNCTYPE(
+    None, 
+    wintypes.HANDLE, 
+    wintypes.DWORD, 
+    wintypes.HWND, 
+    wintypes.LONG, 
+    wintypes.LONG, 
+    wintypes.DWORD, 
+    wintypes.DWORD
+)
 
 def get_window_margins(hwnd):
     """
@@ -53,7 +71,7 @@ def position_window(hwnd, rect):
         placement = win32gui.GetWindowPlacement(hwnd)
         if placement[1] == win32con.SW_SHOWMINIMIZED:
             win32gui.ShowWindow(hwnd, win32con.SW_RESTORE)
-        else:
+        elif placement[1] == win32con.SW_SHOWMAXIMIZED:
             win32gui.ShowWindow(hwnd, win32con.SW_NORMAL)
         
         # Calculate the invisible borders
@@ -71,23 +89,12 @@ def position_window(hwnd, rect):
             0
         )
     except Exception as e:
-        print(f"Failed to position window {hwnd}: {e}")
+        print(f"Failed to position window {hwnd}: {e}", flush=True)
 
-def main():
-    # Ensure process is DPI aware so coordinates perfectly match screen pixels
-    try:
-        ctypes.windll.shcore.SetProcessDpiAwareness(2) # PROCESS_PER_MONITOR_DPI_AWARE
-    except Exception:
-        try:
-            ctypes.windll.user32.SetProcessDPIAware()
-        except:
-            pass
-            
-    print("Starting AppZones Sleek Auto-Layout Manager...")
-    config_path = os.path.join(os.path.dirname(__file__), "config.json")
+def apply_layout_statically():
+    config_path = os.path.join(os.path.dirname(os.path.abspath(__file__)), "config.json")
     config = load_config(config_path)
     
-    # Support new preset schema while maintaining backwards compatibility
     if "presets" in config and "active_preset" in config:
         active = config["active_preset"]
         preset_data = config["presets"].get(active, [])
@@ -101,16 +108,192 @@ def main():
     for zone in zones:
         title = zone.get("window_title", "")
         rect = zone.get("rect")
-        
         if not rect or not title:
             continue
             
         hwnd = find_window_by_title(title)
         if hwnd:
-            print(f"Positioning '{title}' to {rect}")
+            print(f"Positioning '{title}' to {rect}", flush=True)
             position_window(hwnd, rect)
         else:
-            print(f"Could not find running window for: '{title}'")
+            print(f"Skipping '{title}' (window not currently open)", flush=True)
+
+class OverlayWidget(QWidget):
+    def __init__(self):
+        super().__init__()
+        self.setWindowFlags(
+            Qt.WindowType.WindowStaysOnTopHint | 
+            Qt.WindowType.FramelessWindowHint | 
+            Qt.WindowType.Tool |
+            Qt.WindowType.WindowTransparentForInput
+        )
+        self.setAttribute(Qt.WidgetAttribute.WA_TranslucentBackground)
+        self.zones = []
+        self.hovered_zone_idx = -1
+
+    def load_zones(self):
+        config_path = os.path.join(os.path.dirname(os.path.abspath(__file__)), "config.json")
+        config = load_config(config_path)
+        
+        if "presets" in config and "active_preset" in config:
+            active = config["active_preset"]
+            preset_data = config["presets"].get(active, [])
+            if isinstance(preset_data, dict):
+                self.zones = preset_data.get("zones", [])
+            else:
+                self.zones = preset_data
+        else:
+            self.zones = config.get("zones", [])
+            
+        screen_geo = QApplication.primaryScreen().geometry()
+        self.setGeometry(screen_geo)
+
+    def paintEvent(self, event):
+        painter = QPainter(self)
+        painter.setRenderHint(QPainter.RenderHint.Antialiasing)
+        
+        # Dim background
+        painter.fillRect(self.rect(), QColor(0, 0, 0, 100))
+        
+        for i, z in enumerate(self.zones):
+            rect = z.get("rect")
+            if not rect: continue
+            zr = QRect(int(rect["x"]), int(rect["y"]), int(rect["width"]), int(rect["height"]))
+            
+            # Draw Zone
+            if i == self.hovered_zone_idx:
+                painter.setBrush(QColor(0, 120, 212, 120))
+                painter.setPen(QPen(QColor(0, 120, 212, 255), 3))
+            else:
+                painter.setBrush(QColor(255, 255, 255, 30))
+                painter.setPen(QPen(QColor(255, 255, 255, 150), 2))
+                
+            zr.adjust(6, 6, -6, -6)
+            painter.drawRoundedRect(zr, 8, 8)
+            
+            # Draw zone number
+            painter.setPen(QColor(255, 255, 255, 255))
+            font = painter.font()
+            font.setPointSize(24)
+            font.setBold(True)
+            painter.setFont(font)
+            painter.drawText(zr, Qt.AlignmentFlag.AlignCenter, str(i + 1))
+
+class HotkeyFilter(QAbstractNativeEventFilter):
+    def nativeEventFilter(self, eventType, message):
+        try:
+            msg_obj = ctypes.wintypes.MSG.from_address(int(message))
+            if msg_obj.message == win32con.WM_HOTKEY and msg_obj.wParam == 1:
+                gui_path = os.path.join(os.path.dirname(os.path.abspath(__file__)), "gui.py")
+                subprocess.Popen([sys.executable, gui_path])
+                return True, 0
+        except Exception:
+            pass
+        return False, 0
+
+class AppZonesDaemon(QObject):
+    def __init__(self):
+        super().__init__()
+        
+        self.overlay = OverlayWidget()
+        
+        self.is_moving = False
+        self.moving_hwnd = None
+        
+        self.timer = QTimer(self)
+        self.timer.timeout.connect(self.on_tick)
+        
+        # WinEventHook for Drags
+        self.hook_proc = WINEVENTPROC(self.win_event_callback)
+        self.hook = ctypes.windll.user32.SetWinEventHook(
+            0x000A, 0x000B, 0, self.hook_proc, 0, 0, 0
+        )
+        
+    def win_event_callback(self, hWinEventHook, event, hwnd, idObject, idChild, dwEventThread, dwmsEventTime):
+        if idObject != 0: # OBJID_WINDOW = 0
+            return
+            
+        if event == 0x000A: # EVENT_SYSTEM_MOVESIZESTART
+            # Use GA_ROOT to get the main parent window being dragged
+            root_hwnd = ctypes.windll.user32.GetAncestor(hwnd, 2)
+            self.is_moving = True
+            self.moving_hwnd = root_hwnd
+            self.timer.start(16)
+        elif event == 0x000B: # EVENT_SYSTEM_MOVESIZEEND
+            self.is_moving = False
+            self.timer.stop()
+            if self.overlay.isVisible():
+                self.overlay.hide()
+                if self.overlay.hovered_zone_idx != -1:
+                    rect = self.overlay.zones[self.overlay.hovered_zone_idx]["rect"]
+                    # Apply 50ms after to ensure Windows finishes its drop event calculations
+                    QTimer.singleShot(50, lambda h=self.moving_hwnd, r=rect: position_window(h, r))
+                self.overlay.hovered_zone_idx = -1
+
+    def on_tick(self):
+        # 0x11 is VK_CONTROL, covers both left and right control keys
+        ctrl_pressed = ctypes.windll.user32.GetAsyncKeyState(0x11) & 0x8000
+        
+        if ctrl_pressed:
+            if not self.overlay.isVisible():
+                self.overlay.load_zones()
+                self.overlay.show()
+                
+            pos = QCursor.pos()
+            hovered = -1
+            for i, z in enumerate(self.overlay.zones):
+                rect = z.get("rect")
+                if not rect: continue
+                zr = QRect(int(rect["x"]), int(rect["y"]), int(rect["width"]), int(rect["height"]))
+                if zr.contains(pos):
+                    hovered = i
+                    break
+                    
+            if hovered != self.overlay.hovered_zone_idx:
+                self.overlay.hovered_zone_idx = hovered
+                self.overlay.update()
+        else:
+            if self.overlay.isVisible():
+                self.overlay.hide()
+                self.overlay.hovered_zone_idx = -1
+
+def main():
+    # Use a named mutex to act as a single-instance daemon
+    mutex = ctypes.windll.kernel32.CreateMutexW(None, False, "AppZonesDaemonMutex")
+    last_error = ctypes.windll.kernel32.GetLastError()
+    
+    if last_error == 183: # ERROR_ALREADY_EXISTS
+        print("Daemon is already running. Applying layout statically and exiting...", flush=True)
+        apply_layout_statically()
+        sys.exit(0)
+        
+    app = QApplication(sys.argv)
+    
+    # Restore the default C-level SIGINT handler so Ctrl+C gracefully kills it in terminal
+    signal.signal(signal.SIGINT, signal.SIG_DFL)
+    
+    # Apply once on startup for convenience
+    apply_layout_statically()
+    
+    # Securely bind the native event filter to the app thread so the hotkey never misses
+    app._hotkey_filter = HotkeyFilter()
+    app.installNativeEventFilter(app._hotkey_filter)
+    
+    # Register Hotkey: Win + Shift + Z (0 means associate with thread message queue)
+    ctypes.windll.user32.RegisterHotKey(0, 1, 0x0008 | 0x0004, 0x5A)
+    
+    # Start the daemon to listen for Win+Shift+Z and Ctrl+Drag
+    # Keep reference to avoid garbage collection wiping out the Windows Hook
+    app._daemon = AppZonesDaemon()
+    
+    print("\n-------------------------------------------------------------", flush=True)
+    print(" AppZones Daemon is ACTIVE and listening in the background! ", flush=True)
+    print("-------------------------------------------------------------", flush=True)
+    print(" 1. Press 'Win + Shift + Z' at any time to open the AppZones Editor.", flush=True)
+    print(" 2. Hold 'Ctrl' while dragging any window to reveal your zones and snap it.", flush=True)
+    print("-------------------------------------------------------------\n", flush=True)
+    
+    sys.exit(app.exec())
 
 if __name__ == "__main__":
     main()

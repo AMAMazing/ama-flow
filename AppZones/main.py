@@ -155,14 +155,20 @@ class OverlayWidget(QWidget):
         # Dim background
         painter.fillRect(self.rect(), QColor(0, 0, 0, 100))
         
-        for i, z in enumerate(self.zones):
+        # Draw non-hovered zones first, then hovered zone last so its highlight is never covered
+        draw_order = [i for i in range(len(self.zones)) if i != self.hovered_zone_idx]
+        if 0 <= self.hovered_zone_idx < len(self.zones):
+            draw_order.append(self.hovered_zone_idx)
+
+        for i in draw_order:
+            z = self.zones[i]
             rect = z.get("rect")
             if not rect: continue
             zr = QRect(int(rect["x"]), int(rect["y"]), int(rect["width"]), int(rect["height"]))
             
             # Draw Zone
             if i == self.hovered_zone_idx:
-                painter.setBrush(QColor(0, 120, 212, 120))
+                painter.setBrush(QColor(0, 120, 212, 140))
                 painter.setPen(QPen(QColor(0, 120, 212, 255), 3))
             else:
                 painter.setBrush(QColor(255, 255, 255, 30))
@@ -241,13 +247,21 @@ class AppZonesDaemon(QObject):
                 
             pos = QCursor.pos()
             hovered = -1
+            # In overlapping layouts (such as fullscreen + corner overlay),
+            # pick the smallest area zone containing the cursor.
+            # If areas are equal, pick the topmost zone (highest index).
+            matching = []
             for i, z in enumerate(self.overlay.zones):
                 rect = z.get("rect")
                 if not rect: continue
                 zr = QRect(int(rect["x"]), int(rect["y"]), int(rect["width"]), int(rect["height"]))
                 if zr.contains(pos):
-                    hovered = i
-                    break
+                    area = int(rect["width"]) * int(rect["height"])
+                    matching.append((area, -i, i))
+                    
+            if matching:
+                matching.sort()
+                hovered = matching[0][2]
                     
             if hovered != self.overlay.hovered_zone_idx:
                 self.overlay.hovered_zone_idx = hovered

@@ -1,8 +1,9 @@
 {
+  "mode": "fullscreen_corner",
   "layout_settings": {
     "vscode_side": "Right",
     "chrome_sizing": "432px",
-    "active_media_profile": "App (1.68:1)",
+    "active_media_profile": "16:9 (PiP)",
     "chrome_sizes": {
       "Equal Size": "equal",
       "432px": "432",
@@ -17,44 +18,39 @@
       "MYAEW (3:2)": "3:2"
     }
   },
+  "corner_settings": {
+    "fullscreen_app": "Visual Studio Code",
+    "media_app": "Picture in picture",
+    "corner": "Bottom-Left",
+    "max_width": 612,
+    "max_height": 344,
+    "active_media_profile": "16:9 (PiP)"
+  },
   "zones": [
     {
-      "window_title": "Home \u2013 Netflix",
-      "role": "media",
-      "pos": "Bottom-Left",
-      "stat": "Aspect Ratio",
-      "val": "1.68:1",
-      "rect": {
-        "x": 0,
-        "y": 432,
-        "width": 1088,
-        "height": 648
-      }
-    },
-    {
-      "window_title": "Google Chrome",
-      "role": "chrome",
-      "pos": "Top-Left",
-      "stat": "Height (px)",
-      "val": "432",
-      "rect": {
-        "x": 0,
-        "y": 0,
-        "width": 1088,
-        "height": 432
-      }
-    },
-    {
       "window_title": "Visual Studio Code",
-      "role": "vscode",
-      "pos": "Right",
-      "stat": "Fill (Any)",
+      "role": "fullscreen",
+      "pos": "Fullscreen",
+      "stat": "Fullscreen",
       "val": "",
       "rect": {
-        "x": 1088,
+        "x": 0,
         "y": 0,
-        "width": 832,
+        "width": 1920,
         "height": 1080
+      }
+    },
+    {
+      "window_title": "Picture in picture",
+      "role": "media",
+      "pos": "Bottom-Left",
+      "stat": "Aspect Ratio (16:9)",
+      "val": "16:9",
+      "rect": {
+        "x": 0,
+        "y": 736,
+        "width": 611,
+        "height": 344
       }
     }
   ]

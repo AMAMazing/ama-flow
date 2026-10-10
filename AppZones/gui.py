@@ -9,7 +9,7 @@ from ctypes import wintypes
 import win32gui
 from PyQt6.QtWidgets import (QApplication, QMainWindow, QWidget, QVBoxLayout, QHBoxLayout,
                              QPushButton, QLabel, QComboBox, QLineEdit, QScrollArea, QFrame, QDialog, QListWidget,
-                             QInputDialog, QMessageBox)
+                             QInputDialog, QMessageBox, QStackedWidget)
 from PyQt6.QtCore import Qt
 from PyQt6.QtGui import QPainter, QColor, QPen, QFont
 
@@ -252,11 +252,29 @@ def get_open_windows():
             cleaned.append((title, hwnd))
     return sorted(cleaned, key=lambda x: x[0].lower())
 
+def get_window_dimensions(hwnd):
+    try:
+        class RECT(ctypes.Structure):
+            _fields_ = [('left', wintypes.LONG), ('top', wintypes.LONG), ('right', wintypes.LONG), ('bottom', wintypes.LONG)]
+        fr = RECT()
+        if ctypes.windll.dwmapi.DwmGetWindowAttribute(hwnd, 9, ctypes.byref(fr), ctypes.sizeof(fr)) == 0:
+            w = fr.right - fr.left
+            h = fr.bottom - fr.top
+        else:
+            rect = win32gui.GetWindowRect(hwnd)
+            w = rect[2] - rect[0]
+            h = rect[3] - rect[1]
+        return max(0, w), max(0, h)
+    except Exception:
+        try:
+            rect = win32gui.GetWindowRect(hwnd)
+            return max(0, rect[2] - rect[0]), max(0, rect[3] - rect[1])
+        except Exception:
+            return 0, 0
+
 def calculate_window_aspect_ratio(hwnd):
     try:
-        rect = win32gui.GetWindowRect(hwnd)
-        w = rect[2] - rect[0]
-        h = rect[3] - rect[1]
+        w, h = get_window_dimensions(hwnd)
         if w <= 0 or h <= 0:
             return None, 0, 0
         common_ratios = [
@@ -387,6 +405,9 @@ class PreviewWidget(QWidget):
 
             fill_c, border_c = palette[i % len(palette)]
 
+            # If overlapping, use slight transparency so underlying window is recognizable
+            fill_c = QColor(fill_c.red(), fill_c.green(), fill_c.blue(), 210)
+
             gap = 2
             rx = zx + gap
             ry = zy + gap
@@ -399,7 +420,7 @@ class PreviewWidget(QWidget):
 
             # Badge
             painter.setPen(Qt.PenStyle.NoPen)
-            painter.setBrush(QColor(0, 0, 0, 140))
+            painter.setBrush(QColor(0, 0, 0, 160))
             painter.drawRoundedRect(rx + 6, ry + 6, 20, 18, 3, 3)
             painter.setPen(QColor("#ffffff"))
             font_small = QFont("Segoe UI", 8, QFont.Weight.Bold)
@@ -551,9 +572,10 @@ class MainWindow(QMainWindow):
     def __init__(self):
         super().__init__()
         self.setWindowTitle("AppZones - FancyZones Auto-Layout")
-        self.resize(920, 720)
+        self.resize(960, 780)
         self.setStyleSheet(STYLESHEET)
 
+        self.active_mode = "3_window"
         self.rows = []
         self.chrome_sizes = {
             "Equal Size": "equal",
@@ -569,6 +591,14 @@ class MainWindow(QMainWindow):
         self.layout_settings = {
             "vscode_side": "Right",
             "chrome_sizing": "Equal Size",
+            "active_media_profile": "16:9 (PiP)"
+        }
+        self.corner_settings = {
+            "fullscreen_app": "",
+            "media_app": "Netflix",
+            "corner": "Bottom-Right",
+            "max_width": 720,
+            "max_height": 450,
             "active_media_profile": "16:9 (PiP)"
         }
         self._updating_controls = False
@@ -617,14 +647,38 @@ class MainWindow(QMainWindow):
         header.addWidget(self.monitor_card)
         main_layout.addLayout(header)
 
-        # Dynamic Layout Control Bar Card
-        control_card = QFrame()
-        control_card.setObjectName("card")
-        ctrl_main_layout = QVBoxLayout(control_card)
-        ctrl_main_layout.setContentsMargins(16, 14, 16, 14)
-        ctrl_main_layout.setSpacing(12)
+        # Mode Selection Bar Card
+        mode_card = QFrame()
+        mode_card.setObjectName("card")
+        mode_layout = QHBoxLayout(mode_card)
+        mode_layout.setContentsMargins(16, 10, 16, 10)
+        mode_layout.setSpacing(12)
 
-        # Row 1: VS Code Placement & Chrome Sizing
+        lbl_mode = QLabel("Layout Mode:")
+        lbl_mode.setObjectName("field_label")
+        mode_layout.addWidget(lbl_mode)
+
+        self.mode_combo = NoWheelComboBox()
+        self.mode_combo.addItem("3-Window Layout (Code + Chrome + Media)", "3_window")
+        self.mode_combo.addItem("Fullscreen + Corner Media", "fullscreen_corner")
+        self.mode_combo.setMinimumWidth(320)
+        self.mode_combo.currentIndexChanged.connect(self.on_mode_changed)
+        mode_layout.addWidget(self.mode_combo)
+        mode_layout.addStretch()
+
+        main_layout.addWidget(mode_card)
+
+        # Dynamic Controls Stack (Switches depending on layout mode)
+        self.controls_stack = QStackedWidget()
+
+        # Page 0: 3-Window Layout Control Card
+        ctrl_card_3win = QFrame()
+        ctrl_card_3win.setObjectName("card")
+        ctrl_layout_3win = QVBoxLayout(ctrl_card_3win)
+        ctrl_layout_3win.setContentsMargins(16, 14, 16, 14)
+        ctrl_layout_3win.setSpacing(12)
+
+        # Row 1: VS Code Side & Chrome Sizing
         row1 = QHBoxLayout()
         row1.setSpacing(10)
 
@@ -667,9 +721,9 @@ class MainWindow(QMainWindow):
         row1.addWidget(btn_del_chrome)
 
         row1.addStretch()
-        ctrl_main_layout.addLayout(row1)
+        ctrl_layout_3win.addLayout(row1)
 
-        # Row 2: Media Aspect Ratio & Capture
+        # Row 2: Media Aspect Ratio & Capture (for 3-window mode)
         row2 = QHBoxLayout()
         row2.setSpacing(10)
 
@@ -699,9 +753,118 @@ class MainWindow(QMainWindow):
         row2.addWidget(btn_del_ar)
 
         row2.addStretch()
-        ctrl_main_layout.addLayout(row2)
+        ctrl_layout_3win.addLayout(row2)
 
-        main_layout.addWidget(control_card)
+        self.controls_stack.addWidget(ctrl_card_3win)
+
+        # Page 1: Fullscreen + Corner Media Control Card
+        ctrl_card_corner = QFrame()
+        ctrl_card_corner.setObjectName("card")
+        ctrl_layout_corner = QVBoxLayout(ctrl_card_corner)
+        ctrl_layout_corner.setContentsMargins(16, 14, 16, 14)
+        ctrl_layout_corner.setSpacing(12)
+
+        # Corner Row 1: Target Windows & Corner Placement
+        c_row1 = QHBoxLayout()
+        c_row1.setSpacing(10)
+
+        lbl_fs = QLabel("Fullscreen Window:")
+        lbl_fs.setObjectName("field_label")
+        c_row1.addWidget(lbl_fs)
+
+        self.fs_title_input = QLineEdit()
+        self.fs_title_input.setPlaceholderText("Title substring (or blank for any)")
+        self.fs_title_input.setMinimumWidth(150)
+        self.fs_title_input.textChanged.connect(self.on_corner_setting_changed)
+        c_row1.addWidget(self.fs_title_input)
+
+        btn_pick_fs = QPushButton("Pick App...")
+        btn_pick_fs.setObjectName("secondary_action")
+        btn_pick_fs.clicked.connect(self.pick_fullscreen_app)
+        c_row1.addWidget(btn_pick_fs)
+
+        lbl_corner_pos = QLabel("Media Corner:")
+        lbl_corner_pos.setObjectName("field_label")
+        c_row1.addWidget(lbl_corner_pos)
+
+        self.corner_combo = NoWheelComboBox()
+        self.corner_combo.addItems(["Bottom-Right", "Bottom-Left", "Top-Right", "Top-Left"])
+        self.corner_combo.currentTextChanged.connect(self.on_corner_setting_changed)
+        c_row1.addWidget(self.corner_combo)
+
+        lbl_corner_media = QLabel("Media Window:")
+        lbl_corner_media.setObjectName("field_label")
+        c_row1.addWidget(lbl_corner_media)
+
+        self.corner_media_input = QLineEdit()
+        self.corner_media_input.setPlaceholderText("Title substring")
+        self.corner_media_input.setMinimumWidth(130)
+        self.corner_media_input.textChanged.connect(self.on_corner_setting_changed)
+        c_row1.addWidget(self.corner_media_input)
+
+        btn_pick_corner_media = QPushButton("Pick App...")
+        btn_pick_corner_media.setObjectName("secondary_action")
+        btn_pick_corner_media.clicked.connect(self.pick_corner_media_app)
+        c_row1.addWidget(btn_pick_corner_media)
+
+        c_row1.addStretch()
+        ctrl_layout_corner.addLayout(c_row1)
+
+        # Corner Row 2: Max Dimensions & Aspect Ratio Fitting
+        c_row2 = QHBoxLayout()
+        c_row2.setSpacing(10)
+
+        lbl_max_size = QLabel("Max Size:")
+        lbl_max_size.setObjectName("field_label")
+        c_row2.addWidget(lbl_max_size)
+
+        self.corner_max_w_input = QLineEdit()
+        self.corner_max_w_input.setPlaceholderText("Max W (px)")
+        self.corner_max_w_input.setFixedWidth(85)
+        self.corner_max_w_input.textChanged.connect(self.on_corner_setting_changed)
+        c_row2.addWidget(self.corner_max_w_input)
+
+        lbl_x = QLabel("×")
+        lbl_x.setObjectName("field_label")
+        c_row2.addWidget(lbl_x)
+
+        self.corner_max_h_input = QLineEdit()
+        self.corner_max_h_input.setPlaceholderText("Max H (px)")
+        self.corner_max_h_input.setFixedWidth(85)
+        self.corner_max_h_input.textChanged.connect(self.on_corner_setting_changed)
+        c_row2.addWidget(self.corner_max_h_input)
+
+        btn_save_current_corner_size = QPushButton("📷 Save Current Size...")
+        btn_save_current_corner_size.setObjectName("secondary_action")
+        btn_save_current_corner_size.setToolTip("Inspect running media window to set its current dimensions as the max size")
+        btn_save_current_corner_size.clicked.connect(self.detect_and_save_corner_max_size)
+        c_row2.addWidget(btn_save_current_corner_size)
+
+        lbl_corner_ar = QLabel("Aspect Ratio:")
+        lbl_corner_ar.setObjectName("field_label")
+        c_row2.addWidget(lbl_corner_ar)
+
+        self.corner_ar_combo = NoWheelComboBox()
+        self.corner_ar_combo.setMinimumWidth(150)
+        self.corner_ar_combo.currentTextChanged.connect(self.on_corner_ar_changed)
+        c_row2.addWidget(self.corner_ar_combo)
+
+        btn_detect_corner_ar = QPushButton("📷 Save Current AR...")
+        btn_detect_corner_ar.setObjectName("secondary_action")
+        btn_detect_corner_ar.setToolTip("Inspect running media window and save its aspect ratio")
+        btn_detect_corner_ar.clicked.connect(self.detect_and_save_corner_ar)
+        c_row2.addWidget(btn_detect_corner_ar)
+
+        btn_add_corner_ar = QPushButton("+ Custom AR")
+        btn_add_corner_ar.setObjectName("secondary_action")
+        btn_add_corner_ar.clicked.connect(self.add_custom_corner_ar)
+        c_row2.addWidget(btn_add_corner_ar)
+
+        c_row2.addStretch()
+        ctrl_layout_corner.addLayout(c_row2)
+
+        self.controls_stack.addWidget(ctrl_card_corner)
+        main_layout.addWidget(self.controls_stack)
 
         # Section: Layout Preview
         lbl_preview = QLabel("Layout Preview")
@@ -712,7 +875,9 @@ class MainWindow(QMainWindow):
         main_layout.addWidget(self.preview, 1)
 
         # Section: Collapsible Zone Rules
-        zone_header = QHBoxLayout()
+        self.zone_header_widget = QWidget()
+        zone_header = QHBoxLayout(self.zone_header_widget)
+        zone_header.setContentsMargins(0, 0, 0, 0)
         zone_header.setSpacing(10)
 
         lbl_zones = QLabel("Zone Rules")
@@ -726,7 +891,7 @@ class MainWindow(QMainWindow):
         zone_header.addWidget(self.btn_toggle_zones)
 
         zone_header.addStretch()
-        main_layout.addLayout(zone_header)
+        main_layout.addWidget(self.zone_header_widget)
 
         # Collapsible Zone Container (Hidden by default)
         self.zone_container = QWidget()
@@ -737,7 +902,7 @@ class MainWindow(QMainWindow):
         self.scroll = QScrollArea()
         self.scroll.setWidgetResizable(True)
         self.scroll.setFrameShape(QFrame.Shape.NoFrame)
-        self.scroll.setMaximumHeight(300)
+        self.scroll.setMaximumHeight(260)
         self.scroll_content = QWidget()
         self.scroll_content.setObjectName("scroll_content")
         self.rows_layout = QVBoxLayout(self.scroll_content)
@@ -784,17 +949,17 @@ class MainWindow(QMainWindow):
             try:
                 with open(CONFIG_PATH, "r", encoding="utf-8") as f:
                     config = json.load(f)
+                    self.active_mode = config.get("mode", "3_window")
                     if "layout_settings" in config:
                         self.layout_settings.update(config["layout_settings"])
                         if "media_profiles" in config["layout_settings"]:
                             self.media_profiles = config["layout_settings"]["media_profiles"]
                         if "chrome_sizes" in config["layout_settings"]:
                             self.chrome_sizes.update(config["layout_settings"]["chrome_sizes"])
+                    if "corner_settings" in config:
+                        self.corner_settings.update(config["corner_settings"])
                     if "zones" in config and isinstance(config["zones"], list):
                         loaded_zones = config["zones"]
-                    elif "presets" in config:
-                        active = config.get("active_preset", "Default")
-                        loaded_zones = config["presets"].get(active, [])
             except:
                 pass
 
@@ -811,9 +976,26 @@ class MainWindow(QMainWindow):
             ]
 
         self._updating_controls = True
+
+        mode_idx = 0 if self.active_mode == "3_window" else 1
+        self.mode_combo.setCurrentIndex(mode_idx)
+        self.controls_stack.setCurrentIndex(mode_idx)
+        self.zone_header_widget.setVisible(self.active_mode == "3_window")
+        if self.active_mode != "3_window":
+            self.zone_container.setVisible(False)
+
         self.vscode_side_combo.setCurrentText(self.layout_settings.get("vscode_side", "Right"))
         self.refresh_chrome_sizing_combo()
         self.refresh_media_profiles_combo()
+
+        # Update corner controls
+        self.fs_title_input.setText(self.corner_settings.get("fullscreen_app", ""))
+        self.corner_combo.setCurrentText(self.corner_settings.get("corner", "Bottom-Right"))
+        self.corner_media_input.setText(self.corner_settings.get("media_app", "Netflix"))
+        self.corner_max_w_input.setText(str(self.corner_settings.get("max_width", 720)))
+        self.corner_max_h_input.setText(str(self.corner_settings.get("max_height", 450)))
+        self.refresh_corner_ar_combo()
+
         self._updating_controls = False
 
         for row in self.rows[:]:
@@ -821,10 +1003,26 @@ class MainWindow(QMainWindow):
             row.deleteLater()
         self.rows.clear()
 
-        for z in loaded_zones:
-            self.add_row(z)
+        # For 3-window mode rows:
+        three_win_zones = loaded_zones if self.active_mode == "3_window" else [
+            {"window_title": "Home – Netflix", "role": "media", "pos": "Bottom-Left", "stat": "Aspect Ratio", "val": "16:9"},
+            {"window_title": "Google Chrome", "role": "chrome", "pos": "Top-Left", "stat": "Height (px)", "val": "432"},
+            {"window_title": "Visual Studio Code", "role": "vscode", "pos": "Right", "stat": "Fill (Any)", "val": ""}
+        ]
+        for z in three_win_zones:
+            if self.active_mode == "3_window" or z.get("role") in ["media", "chrome", "vscode"]:
+                self.add_row(z)
 
         self.sync_roles_with_layout_settings(update_ui=False)
+        self.update_preview()
+
+    def on_mode_changed(self, idx):
+        self.active_mode = self.mode_combo.currentData()
+        self.controls_stack.setCurrentIndex(idx)
+        self.zone_header_widget.setVisible(self.active_mode == "3_window")
+        if self.active_mode != "3_window":
+            self.zone_container.setVisible(False)
+        self.save_to_disk()
         self.update_preview()
 
     def refresh_chrome_sizing_combo(self):
@@ -856,6 +1054,20 @@ class MainWindow(QMainWindow):
             self.layout_settings["active_media_profile"] = first_key
         self.media_ar_combo.blockSignals(False)
 
+    def refresh_corner_ar_combo(self):
+        self.corner_ar_combo.blockSignals(True)
+        self.corner_ar_combo.clear()
+        for name in self.media_profiles.keys():
+            self.corner_ar_combo.addItem(name)
+        active = self.corner_settings.get("active_media_profile")
+        if active and active in self.media_profiles:
+            self.corner_ar_combo.setCurrentText(active)
+        elif self.media_profiles:
+            first_key = list(self.media_profiles.keys())[0]
+            self.corner_ar_combo.setCurrentText(first_key)
+            self.corner_settings["active_media_profile"] = first_key
+        self.corner_ar_combo.blockSignals(False)
+
     def on_vscode_side_changed(self, text):
         if self._updating_controls:
             return
@@ -879,24 +1091,7 @@ class MainWindow(QMainWindow):
             title = dialog.get_selected()
             if not hwnd:
                 return
-            h = 0
-            w = 0
-            try:
-                class RECT(ctypes.Structure):
-                    _fields_ = [('left', wintypes.LONG), ('top', wintypes.LONG), ('right', wintypes.LONG), ('bottom', wintypes.LONG)]
-                fr = RECT()
-                if ctypes.windll.dwmapi.DwmGetWindowAttribute(hwnd, 9, ctypes.byref(fr), ctypes.sizeof(fr)) == 0:
-                    w = fr.right - fr.left
-                    h = fr.bottom - fr.top
-                else:
-                    rect = win32gui.GetWindowRect(hwnd)
-                    w = rect[2] - rect[0]
-                    h = rect[3] - rect[1]
-            except Exception:
-                rect = win32gui.GetWindowRect(hwnd)
-                w = rect[2] - rect[0]
-                h = rect[3] - rect[1]
-
+            w, h = get_window_dimensions(hwnd)
             if h <= 0:
                 QMessageBox.warning(self, "Could not detect", "Could not calculate size for the selected window.")
                 return
@@ -993,6 +1188,7 @@ class MainWindow(QMainWindow):
                         media_row.app_match.setText(clean_name)
                     media_row.val_input.setText(detected_ar)
                 self.refresh_media_profiles_combo()
+                self.refresh_corner_ar_combo()
                 self.save_to_disk()
                 self.update_preview()
 
@@ -1006,6 +1202,7 @@ class MainWindow(QMainWindow):
                 self.media_profiles[p_name] = ratio
                 self.layout_settings["active_media_profile"] = p_name
                 self.refresh_media_profiles_combo()
+                self.refresh_corner_ar_combo()
                 media_row = self.find_row_by_role("media")
                 if media_row:
                     media_row.val_input.setText(ratio)
@@ -1021,8 +1218,116 @@ class MainWindow(QMainWindow):
             del self.media_profiles[curr]
             self.layout_settings["active_media_profile"] = list(self.media_profiles.keys())[0]
             self.refresh_media_profiles_combo()
+            self.refresh_corner_ar_combo()
             self.save_to_disk()
             self.update_preview()
+
+    # Corner Mode Handlers
+    def on_corner_setting_changed(self):
+        if self._updating_controls:
+            return
+        self.corner_settings["fullscreen_app"] = self.fs_title_input.text().strip()
+        self.corner_settings["corner"] = self.corner_combo.currentText()
+        self.corner_settings["media_app"] = self.corner_media_input.text().strip()
+        try:
+            self.corner_settings["max_width"] = max(100, int(self.corner_max_w_input.text().strip() or "720"))
+        except:
+            pass
+        try:
+            self.corner_settings["max_height"] = max(100, int(self.corner_max_h_input.text().strip() or "450"))
+        except:
+            pass
+        self.save_to_disk()
+        self.update_preview()
+
+    def on_corner_ar_changed(self, name):
+        if self._updating_controls or not name:
+            return
+        self.corner_settings["active_media_profile"] = name
+        self.save_to_disk()
+        self.update_preview()
+
+    def pick_fullscreen_app(self):
+        dialog = AppSelectDialog(self)
+        if dialog.exec():
+            selected = dialog.get_selected()
+            if selected:
+                title = selected.split(" - ")[-1]
+                self.fs_title_input.setText(title)
+
+    def pick_corner_media_app(self):
+        dialog = AppSelectDialog(self)
+        if dialog.exec():
+            selected = dialog.get_selected()
+            if selected:
+                title = selected.split(" - ")[-1]
+                self.corner_media_input.setText(title)
+
+    def detect_and_save_corner_max_size(self):
+        dialog = AppSelectDialog(self, return_hwnd=True)
+        if dialog.exec():
+            hwnd = dialog.selected_hwnd
+            title = dialog.get_selected()
+            if not hwnd:
+                return
+            w, h = get_window_dimensions(hwnd)
+            if w <= 0 or h <= 0:
+                QMessageBox.warning(self, "Could not detect", "Could not calculate size for the selected window.")
+                return
+
+            clean_name = title.split(" - ")[-1].strip() or ""
+            if clean_name and not self.corner_media_input.text():
+                self.corner_media_input.setText(clean_name)
+
+            self.corner_max_w_input.setText(str(w))
+            self.corner_max_h_input.setText(str(h))
+            self.corner_settings["max_width"] = w
+            self.corner_settings["max_height"] = h
+            self.save_to_disk()
+            self.update_preview()
+
+    def detect_and_save_corner_ar(self):
+        dialog = AppSelectDialog(self, return_hwnd=True)
+        if dialog.exec():
+            hwnd = dialog.selected_hwnd
+            title = dialog.get_selected()
+            if not hwnd:
+                return
+            detected_ar, w, h = calculate_window_aspect_ratio(hwnd)
+            if not detected_ar:
+                QMessageBox.warning(self, "Could not detect", "Could not calculate aspect ratio for the selected window.")
+                return
+
+            clean_name = title.split(" - ")[-1].strip() or "Custom Media"
+            suggested_profile = f"{clean_name} ({detected_ar})"
+
+            name, ok = QInputDialog.getText(
+                self, "Save Media Aspect Ratio",
+                f"Detected size: {w} × {h} px\nAspect Ratio: {detected_ar}\n\nEnter profile name:",
+                text=suggested_profile
+            )
+            if ok and name.strip():
+                p_name = name.strip()
+                self.media_profiles[p_name] = detected_ar
+                self.corner_settings["active_media_profile"] = p_name
+                self.refresh_media_profiles_combo()
+                self.refresh_corner_ar_combo()
+                self.save_to_disk()
+                self.update_preview()
+
+    def add_custom_corner_ar(self):
+        ratio, ok = QInputDialog.getText(self, "Add Aspect Ratio", "Enter aspect ratio (e.g. 16:9, 4:3, 2.39:1):", text="16:9")
+        if ok and ratio.strip():
+            ratio = ratio.strip()
+            name, n_ok = QInputDialog.getText(self, "Aspect Ratio Name", "Enter name for this aspect ratio:", text=ratio)
+            if n_ok and name.strip():
+                p_name = name.strip()
+                self.media_profiles[p_name] = ratio
+                self.corner_settings["active_media_profile"] = p_name
+                self.refresh_media_profiles_combo()
+                self.refresh_corner_ar_combo()
+                self.save_to_disk()
+                self.update_preview()
 
     def find_row_by_role(self, role):
         for r in self.rows:
@@ -1112,6 +1417,13 @@ class MainWindow(QMainWindow):
             self.update_preview()
 
     def _get_current_zones_with_rects(self):
+        screen = self.screen().geometry()
+        screen_w = screen.width()
+        screen_h = screen.height()
+
+        if self.active_mode == "fullscreen_corner":
+            return self.calculate_fullscreen_corner_rects(screen_w, screen_h)
+
         zones_data = []
         for row in self.rows:
             data = row.get_data()
@@ -1119,10 +1431,86 @@ class MainWindow(QMainWindow):
                 data["window_title"] = "Empty"
             zones_data.append(data)
 
-        screen = self.screen().geometry()
         active_chrome = self.layout_settings.get("chrome_sizing", "Equal Size")
         chrome_val = self.chrome_sizes.get(active_chrome, "equal")
-        return self.calculate_rects(zones_data, screen.width(), screen.height(), chrome_val=chrome_val)
+        return self.calculate_rects(zones_data, screen_w, screen_h, chrome_val=chrome_val)
+
+    def calculate_fullscreen_corner_rects(self, screen_w, screen_h):
+        fs_title = self.corner_settings.get("fullscreen_app", "").strip() or "Main Fullscreen"
+        media_title = self.corner_settings.get("media_app", "").strip() or "Media (Corner)"
+        corner = self.corner_settings.get("corner", "Bottom-Right")
+        max_w = int(self.corner_settings.get("max_width", 720))
+        max_h = int(self.corner_settings.get("max_height", 450))
+
+        active_ar_name = self.corner_settings.get("active_media_profile")
+        ar_str = self.media_profiles.get(active_ar_name, "16:9")
+
+        def parse_ar(val):
+            try:
+                v = val.replace(":", "/")
+                num, den = map(float, v.split("/"))
+                return num / den
+            except:
+                return 16.0 / 9.0
+
+        ar = parse_ar(ar_str)
+
+        # Fit aspect ratio inside (max_w, max_h)
+        # If max_w / max_h > ar, height is constrained by max_h
+        if max_w / max_h > ar:
+            mw = int(max_h * ar)
+            mh = max_h
+        else:
+            mw = max_w
+            mh = int(max_w / ar)
+
+        mw = max(100, min(mw, screen_w))
+        mh = max(100, min(mh, screen_h))
+
+        # Position corner
+        if corner == "Bottom-Right":
+            mx = screen_w - mw
+            my = screen_h - mh
+        elif corner == "Bottom-Left":
+            mx = 0
+            my = screen_h - mh
+        elif corner == "Top-Right":
+            mx = screen_w - mw
+            my = 0
+        else: # Top-Left
+            mx = 0
+            my = 0
+
+        # Zone 1: Fullscreen window
+        # Zone 2: Corner media window (ordered second so SetWindowPos puts it on top)
+        return [
+            {
+                "window_title": fs_title,
+                "role": "fullscreen",
+                "pos": "Fullscreen",
+                "stat": "Fullscreen",
+                "val": "",
+                "rect": {
+                    "x": 0,
+                    "y": 0,
+                    "width": screen_w,
+                    "height": screen_h
+                }
+            },
+            {
+                "window_title": media_title,
+                "role": "media",
+                "pos": corner,
+                "stat": f"Aspect Ratio ({ar_str})",
+                "val": ar_str,
+                "rect": {
+                    "x": mx,
+                    "y": my,
+                    "width": mw,
+                    "height": mh
+                }
+            }
+        ]
 
     def update_preview(self):
         zones_data = self._get_current_zones_with_rects()
@@ -1315,7 +1703,9 @@ class MainWindow(QMainWindow):
         self.layout_settings["media_profiles"] = self.media_profiles
         self.layout_settings["chrome_sizes"] = self.chrome_sizes
         output_data = {
+            "mode": self.active_mode,
             "layout_settings": self.layout_settings,
+            "corner_settings": self.corner_settings,
             "zones": zones_with_rects
         }
         with open(CONFIG_PATH, "w", encoding="utf-8") as f:

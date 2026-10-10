@@ -7,6 +7,7 @@ import subprocess
 import ctypes
 from ctypes import wintypes
 import win32gui
+import win32con
 from PyQt6.QtWidgets import (QApplication, QMainWindow, QWidget, QVBoxLayout, QHBoxLayout,
                              QPushButton, QLabel, QComboBox, QLineEdit, QScrollArea, QFrame, QDialog, QListWidget,
                              QInputDialog, QMessageBox, QStackedWidget)
@@ -231,19 +232,55 @@ class NoWheelComboBox(QComboBox):
     def wheelEvent(self, event):
         event.ignore()
 
+def is_alt_tab_window(hwnd):
+    if not win32gui.IsWindowVisible(hwnd):
+        return False
+    title = win32gui.GetWindowText(hwnd).strip()
+    if not title:
+        return False
+
+    # Check if cloaked by DWM (attribute 14 = DWMWA_CLOAKED)
+    # Background UWP apps, suspended processes, and hidden virtual desktop windows are cloaked
+    cloaked = ctypes.c_int(0)
+    try:
+        if ctypes.windll.dwmapi.DwmGetWindowAttribute(hwnd, 14, ctypes.byref(cloaked), ctypes.sizeof(cloaked)) == 0:
+            if cloaked.value != 0:
+                return False
+    except Exception:
+        pass
+
+    try:
+        # GWL_EXSTYLE = -20
+        ex_style = win32gui.GetWindowLong(hwnd, win32con.GWL_EXSTYLE)
+        # WS_EX_TOOLWINDOW = 0x00000080, WS_EX_APPWINDOW = 0x00040000
+        if (ex_style & win32con.WS_EX_TOOLWINDOW) and not (ex_style & win32con.WS_EX_APPWINDOW):
+            return False
+
+        # Check owner: owned windows don't appear in Alt+Tab unless promoted with WS_EX_APPWINDOW
+        owner = win32gui.GetWindow(hwnd, win32con.GW_OWNER)
+        if owner and not (ex_style & win32con.WS_EX_APPWINDOW):
+            return False
+
+        rect = win32gui.GetWindowRect(hwnd)
+        if (rect[2] - rect[0] <= 0) or (rect[3] - rect[1] <= 0):
+            return False
+    except Exception:
+        return False
+
+    return True
+
 def get_open_windows():
     windows = []
     def callback(hwnd, _):
-        if win32gui.IsWindowVisible(hwnd):
-            title = win32gui.GetWindowText(hwnd)
-            if title:
-                windows.append((title, hwnd))
+        if is_alt_tab_window(hwnd):
+            title = win32gui.GetWindowText(hwnd).strip()
+            windows.append((title, hwnd))
         return True
     try:
         win32gui.EnumWindows(callback, None)
     except:
         pass
-    junk = ["Program Manager", "Settings", "Microsoft Text Input Application"]
+    junk = {"Program Manager", "Settings", "Microsoft Text Input Application", "Windows Input Experience"}
     seen = set()
     cleaned = []
     for title, hwnd in windows:
@@ -430,7 +467,7 @@ class PreviewWidget(QWidget):
             # Title and dimension text
             title = z.get("window_title", "")
             real_w, real_h = int(rect["width"]), int(rect["height"])
-            display_text = f"{title}\n{real_w} × {real_h} px"
+            display_text = f"{title}\n{real_w} \u00d7 {real_h} px"
 
             font_body = QFont("Segoe UI", 9, QFont.Weight.DemiBold)
             painter.setFont(font_body)
@@ -466,7 +503,7 @@ class ZoneRow(QFrame):
         self.btn_select.clicked.connect(self.select_app)
         top_row.addWidget(self.btn_select)
 
-        btn_del = QPushButton("✕")
+        btn_del = QPushButton("\u2715")
         btn_del.setObjectName("danger")
         btn_del.setToolTip("Delete this zone")
         btn_del.setFixedWidth(32)
@@ -617,7 +654,6 @@ class MainWindow(QMainWindow):
         # Header Area
         header = QHBoxLayout()
         titles_box = QVBoxLayout()
-        titles_box.setSpacing(2)
         title = QLabel("AppZones")
         title.setObjectName("header_title")
         sub = QLabel("Automated PowerToys window placement solver")
@@ -638,7 +674,7 @@ class MainWindow(QMainWindow):
         self.mon_num_label.setAlignment(Qt.AlignmentFlag.AlignCenter)
 
         screen = self.screen().geometry()
-        self.mon_res_label = QLabel(f"{screen.width()} × {screen.height()}")
+        self.mon_res_label = QLabel(f"{screen.width()} \u00d7 {screen.height()}")
         self.mon_res_label.setObjectName("subtitle")
         self.mon_res_label.setAlignment(Qt.AlignmentFlag.AlignCenter)
 
@@ -660,7 +696,7 @@ class MainWindow(QMainWindow):
 
         self.mode_combo = NoWheelComboBox()
         self.mode_combo.addItem("3-Window Layout (Code + Chrome + Media)", "3_window")
-        self.mode_combo.addItem("Fullscreen + Corner Media", "fullscreen_corner")
+        self.mode_combo.addItem("Fullscreen + Corner Media (Weekly Activity)", "fullscreen_corner")
         self.mode_combo.setMinimumWidth(320)
         self.mode_combo.currentIndexChanged.connect(self.on_mode_changed)
         mode_layout.addWidget(self.mode_combo)

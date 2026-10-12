@@ -24,6 +24,7 @@ try:
         calculate_smart_layout,
         calculate_fullscreen_corner_rects
     )
+    from ..core.detector import detector
 except (ImportError, ValueError):
     from core.config import (
         CONFIG_PATH,
@@ -43,14 +44,12 @@ except (ImportError, ValueError):
         calculate_smart_layout,
         calculate_fullscreen_corner_rects
     )
+    from core.detector import detector
 
 from .overlay import OverlayWidget
 from .hotkey import HotkeyFilter
 
 def get_active_zones_for_current_state(config=None):
-    """
-    Determines the current active zones based on open windows and layout settings.
-    """
     if config is None:
         config = load_config(CONFIG_PATH)
 
@@ -67,36 +66,39 @@ def get_active_zones_for_current_state(config=None):
         media_profiles = config.get("layout_settings", {}).get("media_profiles", {})
         return calculate_fullscreen_corner_rects(corner_settings, media_profiles, screen_w, screen_h)
 
-    # 3-window mode (with smart detection & 50/50 fallback)
+    # 3-window mode (smart auto-detect media vs 50/50 split)
     open_wins = get_open_windows()
     zones = calculate_smart_layout(config, screen_w, screen_h, open_windows=open_wins)
     return zones
 
 def apply_layout_statically():
-    """
-    Reads config.json, detects media/browser/code windows, and positions all matched open windows immediately.
-    """
     config = load_config(CONFIG_PATH)
     zones = get_active_zones_for_current_state(config)
 
+    # Check if a media window was detected to get its exact HWND
+    media_profiles = config.get("layout_settings", {}).get("media_profiles", {})
+    detected_app, detected_hwnd, detected_title, ar, prof = detector.detect_active_media(media_profiles)
+
     for zone in zones:
+        role = zone.get("role", "")
         title = zone.get("window_title", "")
         rect = zone.get("rect")
-        if not rect or not title:
+        if not rect:
             continue
 
-        hwnd = find_window_by_title(title)
+        hwnd = None
+        if role == "media" and detected_hwnd:
+            hwnd = detected_hwnd
+        else:
+            hwnd = find_window_by_title(title)
+
         if hwnd:
-            print(f"Positioning '{title}' to {rect}", flush=True)
+            print(f"Positioning '{title}' ({role}) to {rect}", flush=True)
             position_window(hwnd, rect)
         else:
             print(f"Skipping '{title}' (window not currently open)", flush=True)
 
 class AppZonesDaemon(QObject):
-    """
-    Background service listening for window drag/move operations via WinEventHook
-    and displaying the snapping overlay when the configured modifier key is pressed.
-    """
     def __init__(self):
         super().__init__()
 
@@ -108,7 +110,6 @@ class AppZonesDaemon(QObject):
         self.timer = QTimer(self)
         self.timer.timeout.connect(self.on_tick)
 
-        # WinEventHook for Drags
         self.hook_proc = WINEVENTPROC(self.win_event_callback)
         self.hook = ctypes.windll.user32.SetWinEventHook(
             0x000A, 0x000B, 0, self.hook_proc, 0, 0, 0
@@ -123,16 +124,16 @@ class AppZonesDaemon(QObject):
             self.snap_modifier_vk = 0x11
 
     def win_event_callback(self, hWinEventHook, event, hwnd, idObject, idChild, dwEventThread, dwmsEventTime):
-        if idObject != 0:  # OBJID_WINDOW = 0
+        if idObject != 0:
             return
 
-        if event == 0x000A:  # EVENT_SYSTEM_MOVESIZESTART
+        if event == 0x000A:
             root_hwnd = ctypes.windll.user32.GetAncestor(hwnd, 2)
             self.is_moving = True
             self.moving_hwnd = root_hwnd
             self.refresh_modifier_vk()
             self.timer.start(16)
-        elif event == 0x000B:  # EVENT_SYSTEM_MOVESIZEEND
+        elif event == 0x000B:
             self.is_moving = False
             self.timer.stop()
             if self.overlay.isVisible():
@@ -178,13 +179,12 @@ def run_daemon():
     mutex = ctypes.windll.kernel32.CreateMutexW(None, False, "AppZonesDaemonMutex")
     last_error = ctypes.windll.kernel32.GetLastError()
 
-    if last_error == 183:  # ERROR_ALREADY_EXISTS
+    if last_error == 183:
         print("Daemon is already running. Applying layout statically and exiting...", flush=True)
         apply_layout_statically()
         sys.exit(0)
 
     app = QApplication(sys.argv)
-
     signal.signal(signal.SIGINT, signal.SIG_DFL)
 
     apply_layout_statically()
@@ -201,12 +201,10 @@ def run_daemon():
     )
     app.installNativeEventFilter(app._hotkey_filter)
 
-    # Register Hotkey 1: Open GUI (Ctrl + Win + Z default)
     mod1, vk1 = parse_hotkey(open_gui_str)
     if mod1 is not None and vk1 is not None:
         ctypes.windll.user32.RegisterHotKey(0, 1, mod1, vk1)
 
-    # Register Hotkey 2: Apply Layout (Win + Shift + Z default)
     mod2, vk2 = parse_hotkey(apply_layout_str)
     if mod2 is not None and vk2 is not None:
         ctypes.windll.user32.RegisterHotKey(0, 2, mod2, vk2)

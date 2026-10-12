@@ -8,31 +8,47 @@ GUI_SCRIPT = os.path.join(APP_DIR, "gui.py")
 
 DEFAULT_CHROME_SIZES = {
     "Equal Size": "equal",
-    "432px": "432"
+    "432px": "432",
+    "590px": "590"
 }
 
 DEFAULT_MEDIA_PROFILES = {
-    "Auto (Smart Detect)": "auto",
-    "16:9 (PiP)": "16:9",
-    "App (1.68:1)": "1.68:1",
-    "MYAEW (3:2)": "3:2",
-    "4:3 (Classic)": "4:3",
-    "21:9 (Ultrawide)": "21:9",
-    "1:1 (Square)": "1:1"
+    "16:9 (PiP)": {
+        "aspect_ratio": "16:9",
+        "apps": ["Picture in picture", "YouTube", "Netflix", "Disney+", "Paramount+"]
+    },
+    "MYAEW (3:2)": {
+        "aspect_ratio": "3:2",
+        "apps": ["MYAEW"]
+    },
+    "Square (1:1)": {
+        "aspect_ratio": "1:1",
+        "apps": ["YouTube Music", "Spotify"]
+    },
+    "Classic (4:3)": {
+        "aspect_ratio": "4:3",
+        "apps": []
+    },
+    "Ultrawide (21:9)": {
+        "aspect_ratio": "21:9",
+        "apps": []
+    }
 }
 
 DEFAULT_LAYOUT_SETTINGS = {
     "vscode_side": "Right",
     "chrome_sizing": "432px",
-    "active_media_profile": "Auto (Smart Detect)"
+    "active_media_profile": "Auto (Smart Detect)",
+    "chrome_sizes": DEFAULT_CHROME_SIZES,
+    "media_profiles": DEFAULT_MEDIA_PROFILES
 }
 
 DEFAULT_CORNER_SETTINGS = {
-    "fullscreen_app": "",
+    "fullscreen_app": "Visual Studio Code",
     "media_app": "Picture in picture",
     "corner": "Bottom-Right",
-    "max_width": 720,
-    "max_height": 450,
+    "max_width": 640,
+    "max_height": 360,
     "active_media_profile": "16:9 (PiP)"
 }
 
@@ -157,15 +173,31 @@ def format_hotkey_display(hotkey_str):
 def load_config(path=None):
     cfg_path = path or CONFIG_PATH
     if not os.path.exists(cfg_path):
-        return {"zones": [], "keybindings": dict(DEFAULT_KEYBINDINGS)}
+        return {
+            "mode": "3_window",
+            "keybindings": dict(DEFAULT_KEYBINDINGS),
+            "layout_settings": dict(DEFAULT_LAYOUT_SETTINGS),
+            "corner_settings": dict(DEFAULT_CORNER_SETTINGS),
+            "zones": []
+        }
     try:
         with open(cfg_path, "r", encoding="utf-8") as f:
             data = json.load(f)
             if "keybindings" not in data or not isinstance(data["keybindings"], dict):
                 data["keybindings"] = dict(DEFAULT_KEYBINDINGS)
+            if "layout_settings" not in data or not isinstance(data["layout_settings"], dict):
+                data["layout_settings"] = dict(DEFAULT_LAYOUT_SETTINGS)
+            if "corner_settings" not in data or not isinstance(data["corner_settings"], dict):
+                data["corner_settings"] = dict(DEFAULT_CORNER_SETTINGS)
             return data
     except Exception:
-        return {"zones": [], "keybindings": dict(DEFAULT_KEYBINDINGS)}
+        return {
+            "mode": "3_window",
+            "keybindings": dict(DEFAULT_KEYBINDINGS),
+            "layout_settings": dict(DEFAULT_LAYOUT_SETTINGS),
+            "corner_settings": dict(DEFAULT_CORNER_SETTINGS),
+            "zones": []
+        }
 
 def save_config(data, path=None):
     cfg_path = path or CONFIG_PATH

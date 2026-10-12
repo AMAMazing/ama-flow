@@ -4,8 +4,12 @@ from PyQt6.QtGui import QPainter, QColor, QPen
 
 try:
     from ..core.config import CONFIG_PATH, load_config
+    from ..core.win_utils import get_open_windows, get_screen_resolution
+    from ..core.layout_engine import calculate_smart_layout, calculate_fullscreen_corner_rects
 except (ImportError, ValueError):
     from core.config import CONFIG_PATH, load_config
+    from core.win_utils import get_open_windows, get_screen_resolution
+    from core.layout_engine import calculate_smart_layout, calculate_fullscreen_corner_rects
 
 class OverlayWidget(QWidget):
     """
@@ -24,18 +28,26 @@ class OverlayWidget(QWidget):
         self.zones = []
         self.hovered_zone_idx = -1
 
-    def load_zones(self):
-        config = load_config(CONFIG_PATH)
-
-        if "presets" in config and "active_preset" in config:
-            active = config["active_preset"]
-            preset_data = config["presets"].get(active, [])
-            if isinstance(preset_data, dict):
-                self.zones = preset_data.get("zones", [])
-            else:
-                self.zones = preset_data
+    def load_zones(self, zones=None):
+        if zones is not None:
+            self.zones = zones
         else:
-            self.zones = config.get("zones", [])
+            config = load_config(CONFIG_PATH)
+            primary_screen = QApplication.primaryScreen()
+            if primary_screen:
+                screen_geo = primary_screen.geometry()
+                screen_w, screen_h = screen_geo.width(), screen_geo.height()
+            else:
+                screen_w, screen_h = get_screen_resolution()
+
+            mode = config.get("mode", "3_window")
+            if mode == "fullscreen_corner":
+                corner_settings = config.get("corner_settings", {})
+                media_profiles = config.get("layout_settings", {}).get("media_profiles", {})
+                self.zones = calculate_fullscreen_corner_rects(corner_settings, media_profiles, screen_w, screen_h)
+            else:
+                open_wins = get_open_windows()
+                self.zones = calculate_smart_layout(config, screen_w, screen_h, open_windows=open_wins)
 
         primary_screen = QApplication.primaryScreen()
         if primary_screen:

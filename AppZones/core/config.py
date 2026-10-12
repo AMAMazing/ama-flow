@@ -12,22 +12,24 @@ DEFAULT_CHROME_SIZES = {
 }
 
 DEFAULT_MEDIA_PROFILES = {
+    "Auto (Smart Detect)": "auto",
     "16:9 (PiP)": "16:9",
+    "App (1.68:1)": "1.68:1",
+    "MYAEW (3:2)": "3:2",
     "4:3 (Classic)": "4:3",
     "21:9 (Ultrawide)": "21:9",
-    "1:1 (Square)": "1:1",
-    "MYAEW": "16:9"
+    "1:1 (Square)": "1:1"
 }
 
 DEFAULT_LAYOUT_SETTINGS = {
     "vscode_side": "Right",
-    "chrome_sizing": "Equal Size",
-    "active_media_profile": "16:9 (PiP)"
+    "chrome_sizing": "432px",
+    "active_media_profile": "Auto (Smart Detect)"
 }
 
 DEFAULT_CORNER_SETTINGS = {
     "fullscreen_app": "",
-    "media_app": "Netflix",
+    "media_app": "Picture in picture",
     "corner": "Bottom-Right",
     "max_width": 720,
     "max_height": 450,
@@ -37,18 +39,133 @@ DEFAULT_CORNER_SETTINGS = {
 DEFAULT_APP_TITLES_3WIN = {
     "vscode": "Visual Studio Code",
     "chrome": "Google Chrome",
-    "media": "Netflix"
+    "media": "Picture in picture"
 }
+
+DEFAULT_KEYBINDINGS = {
+    "open_gui": "Ctrl+Win+Z",
+    "snap_modifier": "Ctrl",
+    "apply_layout": "Win+Shift+Z"
+}
+
+def parse_hotkey(hotkey_str):
+    """
+    Parses a hotkey string like 'Ctrl+Win+Z' or 'Win+Shift+Z' into (modifiers, vk_code).
+    Returns (mod, vk) or (None, None) if invalid.
+    """
+    if not hotkey_str or not isinstance(hotkey_str, str):
+        return None, None
+
+    parts = [p.strip().lower() for p in hotkey_str.replace("-", "+").split("+") if p.strip()]
+    if not parts:
+        return None, None
+
+    MOD_ALT = 0x0001
+    MOD_CONTROL = 0x0002
+    MOD_SHIFT = 0x0004
+    MOD_WIN = 0x0008
+
+    mod = 0
+    key_token = None
+
+    for part in parts:
+        if part in ("win", "windows", "super", "meta"):
+            mod |= MOD_WIN
+        elif part in ("ctrl", "control"):
+            mod |= MOD_CONTROL
+        elif part in ("shift",):
+            mod |= MOD_SHIFT
+        elif part in ("alt", "menu"):
+            mod |= MOD_ALT
+        else:
+            key_token = part
+
+    if not key_token:
+        return None, None
+
+    vk = None
+    if len(key_token) == 1:
+        c = key_token.upper()
+        if 'A' <= c <= 'Z' or '0' <= c <= '9':
+            vk = ord(c)
+        elif c == ' ':
+            vk = 0x20
+    else:
+        if key_token.startswith("f") and key_token[1:].isdigit():
+            f_num = int(key_token[1:])
+            if 1 <= f_num <= 24:
+                vk = 0x70 + (f_num - 1)
+        elif key_token in ("space", "spacebar"):
+            vk = 0x20
+        elif key_token in ("tab",):
+            vk = 0x09
+        elif key_token in ("enter", "return"):
+            vk = 0x0D
+        elif key_token in ("esc", "escape"):
+            vk = 0x1B
+        elif key_token in ("up",):
+            vk = 0x26
+        elif key_token in ("down",):
+            vk = 0x28
+        elif key_token in ("left",):
+            vk = 0x25
+        elif key_token in ("right",):
+            vk = 0x27
+
+    if vk is None:
+        return None, None
+
+    return mod, vk
+
+def parse_modifier_vk(modifier_str):
+    """
+    Parses a modifier string into a virtual key code for GetAsyncKeyState.
+    Supports Ctrl (0x11), Shift (0x10), Alt (0x12), Win (0x5B).
+    Defaults to 0x11 (VK_CONTROL).
+    """
+    s = (modifier_str or "").strip().lower()
+    if "alt" in s:
+        return 0x12  # VK_MENU
+    if "shift" in s:
+        return 0x10  # VK_SHIFT
+    if "win" in s:
+        return 0x5B  # VK_LWIN
+    return 0x11     # VK_CONTROL
+
+def format_hotkey_display(hotkey_str):
+    """
+    Normalizes a hotkey string to human-readable format, e.g. 'Ctrl + Win + Z'.
+    """
+    if not hotkey_str:
+        return ""
+    parts = [p.strip() for p in hotkey_str.replace("-", "+").split("+") if p.strip()]
+    normalized = []
+    for p in parts:
+        pl = p.lower()
+        if pl in ("win", "windows"):
+            normalized.append("Win")
+        elif pl in ("ctrl", "control"):
+            normalized.append("Ctrl")
+        elif pl == "shift":
+            normalized.append("Shift")
+        elif pl in ("alt", "menu"):
+            normalized.append("Alt")
+        else:
+            normalized.append(p.upper() if len(p) <= 3 else p.capitalize())
+    return " + ".join(normalized)
 
 def load_config(path=None):
     cfg_path = path or CONFIG_PATH
     if not os.path.exists(cfg_path):
-        return {"zones": []}
+        return {"zones": [], "keybindings": dict(DEFAULT_KEYBINDINGS)}
     try:
         with open(cfg_path, "r", encoding="utf-8") as f:
-            return json.load(f)
+            data = json.load(f)
+            if "keybindings" not in data or not isinstance(data["keybindings"], dict):
+                data["keybindings"] = dict(DEFAULT_KEYBINDINGS)
+            return data
     except Exception:
-        return {"zones": []}
+        return {"zones": [], "keybindings": dict(DEFAULT_KEYBINDINGS)}
 
 def save_config(data, path=None):
     cfg_path = path or CONFIG_PATH

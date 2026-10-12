@@ -1,5 +1,21 @@
 import re
 
+PWA_MEDIA_KEYWORDS = [
+    "netflix",
+    "youtube",
+    "disney+",
+    "disney plus",
+    "prime video",
+    "amazon prime",
+    "hulu",
+    "twitch",
+    "crunchyroll",
+    "max",
+    "hbo max",
+    "apple tv",
+    "spotify"
+]
+
 def parse_aspect_ratio(val):
     try:
         v = str(val).replace(":", "/")
@@ -7,6 +23,72 @@ def parse_aspect_ratio(val):
         return num / den
     except Exception:
         return 16.0 / 9.0
+
+def detect_smart_media_window(open_windows, configured_media_title=None, code_title="Visual Studio Code", chrome_title="Google Chrome"):
+    """
+    Inspects currently open windows [(title, hwnd), ...] to detect if an active media
+    tab/window is open, and returns:
+        (detected_title, detected_hwnd, profile_name, ar_str)
+    or
+        (None, None, None, None) if no media window is found.
+
+    Priority:
+      1. Window named "Picture in picture" or "Picture-in-Picture" -> PiP (16:9)
+      2. Window containing "MyAEW" -> MYAEW (3:2)
+      3. PWA streaming services (Netflix, YouTube, Disney+, etc.) -> App (1.68:1)
+      4. Configured media title substring (if specified and open)
+    """
+    if not open_windows:
+        return None, None, None, None
+
+    code_lower = (code_title or "visual studio code").lower()
+    chrome_lower = (chrome_title or "google chrome").lower()
+
+    # Rule 1: Window named "Picture in picture" or "Picture-in-Picture"
+    for title, hwnd in open_windows:
+        tl = title.lower()
+        if "picture in picture" in tl or "picture-in-picture" in tl:
+            return title, hwnd, "16:9 (PiP)", "16:9"
+
+    # Rule 2: Window containing "MyAEW"
+    for title, hwnd in open_windows:
+        tl = title.lower()
+        if "myaew" in tl:
+            return title, hwnd, "MYAEW (3:2)", "3:2"
+
+    # Identify primary VSCode and Chrome windows to prevent treating main browser as media
+    primary_code_hwnd = None
+    primary_chrome_hwnd = None
+    for title, hwnd in open_windows:
+        tl = title.lower()
+        if not primary_code_hwnd and (code_lower in tl or "visual studio code" in tl):
+            primary_code_hwnd = hwnd
+        if not primary_chrome_hwnd and (chrome_lower in tl or "google chrome" in tl):
+            primary_chrome_hwnd = hwnd
+
+    # Rule 3: PWA versions of Netflix, YouTube, Disney+, etc.
+    for title, hwnd in open_windows:
+        if hwnd == primary_code_hwnd:
+            continue
+        tl = title.lower()
+        # If it's the only Chrome window and it's regular browsing (e.g. "New Tab - Google Chrome"), skip
+        if hwnd == primary_chrome_hwnd and "google chrome" in tl and not any(kw in tl for kw in ["netflix", "youtube", "disney"]):
+            continue
+
+        for kw in PWA_MEDIA_KEYWORDS:
+            if kw in tl:
+                return title, hwnd, "App (1.68:1)", "1.68:1"
+
+    # Rule 4: Configured media title if explicitly provided and open
+    if configured_media_title and configured_media_title.strip():
+        cfg_lower = configured_media_title.strip().lower()
+        for title, hwnd in open_windows:
+            if hwnd == primary_code_hwnd or hwnd == primary_chrome_hwnd:
+                continue
+            if cfg_lower in title.lower():
+                return title, hwnd, "16:9 (PiP)", "16:9"
+
+    return None, None, None, None
 
 def calculate_fullscreen_corner_rects(corner_settings, media_profiles, screen_w, screen_h):
     fs_title = corner_settings.get("fullscreen_app", "").strip() or "Main Fullscreen"
@@ -243,3 +325,113 @@ def calculate_rects(zones, screen_w, screen_h, chrome_val="equal"):
             z["rect"] = {"x": rem_x + i * fill_w, "y": rem_y, "width": max(0, fw), "height": rem_h}
 
     return zones
+
+def calculate_smart_layout(config_or_data, screen_w, screen_h, open_windows=None):
+    """
+    Computes active zones intelligently based on currently open windows:
+      - If no media tab/window is open -> 50/50 split between Chrome and VS Code.
+      - If media tab/window is open:
+          * "Picture in picture" -> 16:9
+          * "MyAEW" -> 3:2
+          * PWA (Netflix, YouTube, Disney+, etc.) -> 1.68:1
+          * Configured media -> configured ratio
+    """
+    layout_settings = config_or_data.get("layout_settings", {})
+    chrome_sizes = config_or_data.get("chrome_sizes", layout_settings.get("chrome_sizes", {}))
+    media_profiles = config_or_data.get("media_profiles", layout_settings.get("media_profiles", {}))
+    app_titles = config_or_data.get("app_titles", {})
+
+    # Extract configured titles
+    code_title = app_titles.get("vscode") or layout_settings.get("vscode_title") or "Visual Studio Code"
+    chrome_title = app_titles.get("chrome") or layout_settings.get("chrome_title") or "Google Chrome"
+    configured_media = app_titles.get("media") or layout_settings.get("media_title") or "Picture in picture"
+
+    vscode_side = layout_settings.get("vscode_side", "Right")
+    active_profile = layout_settings.get("active_media_profile", "Auto (Smart Detect)")
+
+    # Detect media window
+    detected_title, detected_hwnd, profile_name, ar_str = detect_smart_media_window(
+        open_windows,
+        configured_media_title=configured_media,
+        code_title=code_title,
+        chrome_title=chrome_title
+    )
+
+    is_auto = (active_profile == "Auto (Smart Detect)" or active_profile == "auto")
+
+    # If no media window is detected:
+    # 50/50 split between Chrome and VS Code (no media zone)
+    if detected_title is None and (is_auto or open_windows is not None):
+        half_w = screen_w // 2
+        rem_w = screen_w - half_w
+
+        if vscode_side == "Right":
+            chrome_rect = {"x": 0, "y": 0, "width": half_w, "height": screen_h}
+            vscode_rect = {"x": half_w, "y": 0, "width": rem_w, "height": screen_h}
+            chrome_pos = "Left"
+            vscode_pos = "Right"
+        else:
+            vscode_rect = {"x": 0, "y": 0, "width": half_w, "height": screen_h}
+            chrome_rect = {"x": half_w, "y": 0, "width": rem_w, "height": screen_h}
+            vscode_pos = "Left"
+            chrome_pos = "Right"
+
+        return [
+            {
+                "window_title": chrome_title,
+                "role": "chrome",
+                "pos": chrome_pos,
+                "stat": "Width (50%)",
+                "val": "50%",
+                "rect": chrome_rect
+            },
+            {
+                "window_title": code_title,
+                "role": "vscode",
+                "pos": vscode_pos,
+                "stat": "Width (50%)",
+                "val": "50%",
+                "rect": vscode_rect
+            }
+        ]
+
+    # Media window is present (or previewing 3-window)
+    if is_auto:
+        media_val = ar_str or "16:9"
+        media_win_title = detected_title or configured_media or "Picture in picture"
+    else:
+        media_val = media_profiles.get(active_profile, "16:9")
+        media_win_title = detected_title or configured_media or "Picture in picture"
+
+    other_side = "Left" if vscode_side == "Right" else "Right"
+    top_pos = f"Top-{other_side}"
+    bot_pos = f"Bottom-{other_side}"
+
+    active_chrome = layout_settings.get("chrome_sizing", "Equal Size")
+    chrome_val = chrome_sizes.get(active_chrome, "equal")
+
+    zones = [
+        {
+            "window_title": media_win_title,
+            "role": "media",
+            "pos": bot_pos,
+            "stat": "Aspect Ratio",
+            "val": media_val
+        },
+        {
+            "window_title": chrome_title,
+            "role": "chrome",
+            "pos": top_pos,
+            "stat": "Height (px)" if chrome_val == "equal" else ("Height (%)" if "%" in str(chrome_val) else "Height (px)"),
+            "val": "" if chrome_val == "equal" else str(chrome_val)
+        },
+        {
+            "window_title": code_title,
+            "role": "vscode",
+            "pos": vscode_side,
+            "stat": "Fill (Any)",
+            "val": ""
+        }
+    ]
+
+    return calculate_rects(zones, screen_w, screen_h, chrome_val=chrome_val)

@@ -24,6 +24,18 @@ WINEVENTPROC = ctypes.WINFUNCTYPE(
     wintypes.DWORD
 )
 
+def get_screen_resolution():
+    try:
+        user32 = ctypes.windll.user32
+        # SM_CXSCREEN = 0, SM_CYSCREEN = 1
+        w = user32.GetSystemMetrics(0)
+        h = user32.GetSystemMetrics(1)
+        if w > 0 and h > 0:
+            return w, h
+    except Exception:
+        pass
+    return 1920, 1080
+
 def get_window_margins(hwnd):
     """
     Returns (pad_left, pad_top, pad_right, pad_bottom) by comparing

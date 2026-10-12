@@ -12,6 +12,7 @@ try:
     from ui.overlay import FullscreenPreviewOverlay
     from ui.three_window_panel import ThreeWindowPanel
     from ui.corner_panel import CornerPanel
+    from ui.dialogs import SettingsDialog
     from core.config import (
         CONFIG_PATH,
         MAIN_SCRIPT,
@@ -20,19 +21,23 @@ try:
         DEFAULT_LAYOUT_SETTINGS,
         DEFAULT_CORNER_SETTINGS,
         DEFAULT_APP_TITLES_3WIN,
+        DEFAULT_KEYBINDINGS,
         load_config,
         save_config,
     )
     from core.layout_engine import (
         calculate_rects,
         calculate_fullscreen_corner_rects,
+        calculate_smart_layout
     )
+    from core.win_utils import get_open_windows
 except (ImportError, ValueError):
     from .styles import STYLESHEET
     from .widgets import NoWheelComboBox
     from .overlay import FullscreenPreviewOverlay
     from .three_window_panel import ThreeWindowPanel
     from .corner_panel import CornerPanel
+    from .dialogs import SettingsDialog
     from ..core.config import (
         CONFIG_PATH,
         MAIN_SCRIPT,
@@ -41,13 +46,16 @@ except (ImportError, ValueError):
         DEFAULT_LAYOUT_SETTINGS,
         DEFAULT_CORNER_SETTINGS,
         DEFAULT_APP_TITLES_3WIN,
+        DEFAULT_KEYBINDINGS,
         load_config,
         save_config,
     )
     from ..core.layout_engine import (
         calculate_rects,
         calculate_fullscreen_corner_rects,
+        calculate_smart_layout
     )
+    from ..core.win_utils import get_open_windows
 
 class MainWindow(QMainWindow):
     def __init__(self):
@@ -66,6 +74,7 @@ class MainWindow(QMainWindow):
         self.layout_settings = dict(DEFAULT_LAYOUT_SETTINGS)
         self.corner_settings = dict(DEFAULT_CORNER_SETTINGS)
         self.app_titles_3win = dict(DEFAULT_APP_TITLES_3WIN)
+        self.keybindings = dict(DEFAULT_KEYBINDINGS)
 
         # Initialize the 1:1 fullscreen live preview overlay
         self.overlay_preview = FullscreenPreviewOverlay()
@@ -85,7 +94,7 @@ class MainWindow(QMainWindow):
         header = QHBoxLayout()
         titles_box = QVBoxLayout()
         titles_box.setSpacing(1)
-        title = QLabel("AppZones ⚡")
+        title = QLabel("AppZones 🪟")
         title.setObjectName("header_title")
         sub = QLabel("Automated PowerToys window placement solver")
         sub.setObjectName("subtitle")
@@ -107,6 +116,15 @@ class MainWindow(QMainWindow):
         self.mon_res_label.setStyleSheet("color: #d1d1db; font-weight: 600; font-size: 12px;")
         mon_layout.addWidget(self.mon_res_label)
         header.addWidget(self.monitor_card)
+
+        # Settings button
+        self.btn_settings = QPushButton("⚙️ Settings")
+        self.btn_settings.setObjectName("secondary_action")
+        self.btn_settings.setMinimumHeight(32)
+        self.btn_settings.setToolTip("Configure Hotkeys & Keybindings")
+        self.btn_settings.clicked.connect(self.open_settings)
+        header.addWidget(self.btn_settings)
+
         main_layout.addLayout(header)
 
         # Mode Selection Bar
@@ -121,8 +139,8 @@ class MainWindow(QMainWindow):
         mode_layout.addWidget(lbl_mode)
 
         self.mode_combo = NoWheelComboBox()
-        self.mode_combo.addItem("🪟 3-Window Setup (Code + Chrome + Media)", "3_window")
-        self.mode_combo.addItem("🎯 Fullscreen + Corner Media (Weekly Activity)", "fullscreen_corner")
+        self.mode_combo.addItem("📐 3-Window Setup (Code + Chrome + Media)", "3_window")
+        self.mode_combo.addItem("�️ Fullscreen + Corner Media (Weekly Activity)", "fullscreen_corner")
         self.mode_combo.setMinimumWidth(340)
         self.mode_combo.currentIndexChanged.connect(self.on_mode_changed)
         mode_layout.addWidget(self.mode_combo)
@@ -148,12 +166,12 @@ class MainWindow(QMainWindow):
         footer = QHBoxLayout()
         footer.setSpacing(10)
 
-        tip_lbl = QLabel("💡 Tip: Hold Ctrl while dragging any window to snap it into position.")
-        tip_lbl.setObjectName("subtitle")
-        footer.addWidget(tip_lbl)
+        self.tip_lbl = QLabel(f"💡 Tip: Hold {self.keybindings.get('snap_modifier', 'Ctrl')} while dragging any window to snap it into position.")
+        self.tip_lbl.setObjectName("subtitle")
+        footer.addWidget(self.tip_lbl)
         footer.addStretch()
 
-        btn_apply = QPushButton("🚀 Apply Layout")
+        btn_apply = QPushButton("⚡ Apply Layout")
         btn_apply.setObjectName("primary")
         btn_apply.setMinimumHeight(38)
         btn_apply.setMinimumWidth(160)
@@ -161,6 +179,13 @@ class MainWindow(QMainWindow):
         footer.addWidget(btn_apply)
 
         main_layout.addLayout(footer)
+
+    def open_settings(self):
+        dlg = SettingsDialog(self)
+        if dlg.exec():
+            self.keybindings = dlg.get_keybindings()
+            snap_mod = self.keybindings.get("snap_modifier", "Ctrl")
+            self.tip_lbl.setText(f"💡 Tip: Hold {snap_mod} while dragging any window to snap it into position.")
 
     def showEvent(self, event):
         super().showEvent(event)
@@ -183,6 +208,8 @@ class MainWindow(QMainWindow):
 
         if config:
             self.active_mode = config.get("mode", "3_window")
+            if "keybindings" in config and isinstance(config["keybindings"], dict):
+                self.keybindings.update(config["keybindings"])
             if "layout_settings" in config:
                 self.layout_settings.update(config["layout_settings"])
                 if "media_profiles" in config["layout_settings"]:
@@ -194,6 +221,8 @@ class MainWindow(QMainWindow):
             if "zones" in config and isinstance(config["zones"], list):
                 loaded_zones = config["zones"]
 
+        if "Auto (Smart Detect)" not in self.media_profiles:
+            self.media_profiles["Auto (Smart Detect)"] = "auto"
         if "Equal Size" not in self.chrome_sizes:
             self.chrome_sizes["Equal Size"] = "equal"
         if "432px" not in self.chrome_sizes:
@@ -224,6 +253,9 @@ class MainWindow(QMainWindow):
             self.media_profiles
         )
 
+        snap_mod = self.keybindings.get("snap_modifier", "Ctrl")
+        self.tip_lbl.setText(f"💡 Tip: Hold {snap_mod} while dragging any window to snap it into position.")
+
         self.update_dimensions_display()
 
     def on_mode_changed(self, idx):
@@ -249,41 +281,15 @@ class MainWindow(QMainWindow):
                 screen_h
             )
 
-        # 3-window zones
-        vscode_side = self.layout_settings.get("vscode_side", "Right")
-        other_side = "Left" if vscode_side == "Right" else "Right"
-        top_pos = f"Top-{other_side}"
-        bot_pos = f"Bottom-{other_side}"
-
-        curr_ar = self.media_profiles.get(self.layout_settings.get("active_media_profile", "16:9 (PiP)"), "16:9")
-        active_chrome = self.layout_settings.get("chrome_sizing", "Equal Size")
-        chrome_val = self.chrome_sizes.get(active_chrome, "equal")
-
-        zones = [
-            {
-                "window_title": self.app_titles_3win.get("media", "Netflix"),
-                "role": "media",
-                "pos": bot_pos,
-                "stat": "Aspect Ratio",
-                "val": curr_ar
-            },
-            {
-                "window_title": self.app_titles_3win.get("chrome", "Google Chrome"),
-                "role": "chrome",
-                "pos": top_pos,
-                "stat": "Height (px)" if chrome_val == "equal" else ("Height (%)" if "%" in str(chrome_val) else "Height (px)"),
-                "val": "" if chrome_val == "equal" else str(chrome_val)
-            },
-            {
-                "window_title": self.app_titles_3win.get("vscode", "Visual Studio Code"),
-                "role": "vscode",
-                "pos": vscode_side,
-                "stat": "Fill (Any)",
-                "val": ""
-            }
-        ]
-
-        return calculate_rects(zones, screen_w, screen_h, chrome_val=chrome_val)
+        # 3-window mode with smart detection & 50/50 fallback
+        config_data = {
+            "layout_settings": self.layout_settings,
+            "chrome_sizes": self.chrome_sizes,
+            "media_profiles": self.media_profiles,
+            "app_titles": self.app_titles_3win
+        }
+        open_wins = get_open_windows()
+        return calculate_smart_layout(config_data, screen_w, screen_h, open_windows=open_wins)
 
     def update_dimensions_display(self):
         zones_data = self._get_current_zones_with_rects()
@@ -316,6 +322,7 @@ class MainWindow(QMainWindow):
         self.layout_settings["chrome_sizes"] = self.chrome_sizes
         output_data = {
             "mode": self.active_mode,
+            "keybindings": self.keybindings,
             "layout_settings": self.layout_settings,
             "corner_settings": self.corner_settings,
             "zones": zones_with_rects

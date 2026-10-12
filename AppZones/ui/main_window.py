@@ -8,7 +8,7 @@ from PyQt6.QtCore import Qt, QTimer, QEvent
 
 try:
     from ui.styles import STYLESHEET
-    from ui.preview_widget import LiveLayoutPreview
+    from ui.overlay import FullscreenPreviewOverlay
     from ui.aspect_ratio_manager import AspectRatioRow, AddAspectRatioDialog
     from ui.dialogs import SettingsDialog
     from core.config import (
@@ -31,7 +31,7 @@ try:
     from core.win_utils import get_open_windows
 except (ImportError, ValueError):
     from .styles import STYLESHEET
-    from .preview_widget import LiveLayoutPreview
+    from .overlay import FullscreenPreviewOverlay
     from .aspect_ratio_manager import AspectRatioRow, AddAspectRatioDialog
     from .dialogs import SettingsDialog
     from ..core.config import (
@@ -58,10 +58,11 @@ class MainWindow(QMainWindow):
     def __init__(self):
         super().__init__()
         self.setWindowTitle("AppZones")
-        self.resize(780, 720)
-        self.setMinimumSize(700, 600)
+        self.resize(760, 620)
+        self.setMinimumSize(680, 520)
         self.setStyleSheet(STYLESHEET)
 
+        # Stay on top of the fullscreen desktop overlay so the GUI is always accessible
         self.setWindowFlags(self.windowFlags() | Qt.WindowType.WindowStaysOnTopHint)
 
         self.active_mode = "3_window"
@@ -72,10 +73,13 @@ class MainWindow(QMainWindow):
         self.app_titles_3win = dict(DEFAULT_APP_TITLES_3WIN)
         self.keybindings = dict(DEFAULT_KEYBINDINGS)
 
+        # Fullscreen live preview overlay displayed on desktop behind GUI (like holding Ctrl)
+        self.overlay_preview = FullscreenPreviewOverlay()
+
         self.init_ui()
         self.load_data()
 
-        # Auto-refresh detection status and live preview every 1.5 seconds
+        # Auto-refresh detection status and fullscreen live overlay every 1.5 seconds
         self.poll_timer = QTimer(self)
         self.poll_timer.timeout.connect(self.on_periodic_refresh)
         self.poll_timer.start(1500)
@@ -139,86 +143,71 @@ class MainWindow(QMainWindow):
 
         main_layout.addWidget(self.status_card)
 
-        # 3. Embedded Live Layout Preview Card (Clean, scaled mini-map)
-        preview_card = QFrame()
-        preview_card.setObjectName("card")
-        preview_layout = QVBoxLayout(preview_card)
-        preview_layout.setContentsMargins(14, 10, 14, 10)
-        preview_layout.setSpacing(6)
-
-        prev_header = QHBoxLayout()
-        prev_title = QLabel("LIVE WORKSPACE PREVIEW")
-        prev_title.setObjectName("section_heading")
-        prev_header.addWidget(prev_title)
-        prev_header.addStretch()
-        preview_layout.addLayout(prev_header)
-
-        self.live_preview = LiveLayoutPreview(self)
-        preview_layout.addWidget(self.live_preview)
-
-        main_layout.addWidget(preview_card)
-
-        # 4. Workspace Preferences Card
+        # 3. Workspace Controls Card (3 SEPARATE LINES - NEVER SHARED)
         pref_card = QFrame()
         pref_card.setObjectName("card")
         pref_layout = QVBoxLayout(pref_card)
-        pref_layout.setContentsMargins(16, 12, 16, 12)
-        pref_layout.setSpacing(10)
+        pref_layout.setContentsMargins(16, 14, 16, 14)
+        pref_layout.setSpacing(12)
 
         sec_title = QLabel("WORKSPACE CONTROLS")
         sec_title.setObjectName("section_heading")
         pref_layout.addWidget(sec_title)
 
-        # Row 1: VS Code Position & Chrome Size
-        row1 = QHBoxLayout()
-        lbl_vsc = QLabel("VS Code Position:")
+        # Line 1: VS Code Position
+        line1 = QHBoxLayout()
+        lbl_vsc = QLabel("Visual Studio Code Position")
         lbl_vsc.setObjectName("card_title")
-        row1.addWidget(lbl_vsc)
+        line1.addWidget(lbl_vsc)
+        line1.addStretch()
 
         self.btn_side_left = QPushButton("Left")
         self.btn_side_left.setProperty("class", "segment_btn")
         self.btn_side_left.setCheckable(True)
         self.btn_side_left.clicked.connect(lambda: self.set_vscode_side("Left"))
-        row1.addWidget(self.btn_side_left)
+        line1.addWidget(self.btn_side_left)
 
         self.btn_side_right = QPushButton("Right")
         self.btn_side_right.setProperty("class", "segment_btn")
         self.btn_side_right.setCheckable(True)
         self.btn_side_right.clicked.connect(lambda: self.set_vscode_side("Right"))
-        row1.addWidget(self.btn_side_right)
+        line1.addWidget(self.btn_side_right)
 
-        row1.addSpacing(20)
+        pref_layout.addLayout(line1)
 
-        lbl_chr = QLabel("Chrome Size:")
+        # Line 2: Chrome Companion Size
+        line2 = QHBoxLayout()
+        lbl_chr = QLabel("Chrome Companion Size (3-Window Setup)")
         lbl_chr.setObjectName("card_title")
-        row1.addWidget(lbl_chr)
+        line2.addWidget(lbl_chr)
+        line2.addStretch()
 
-        self.btn_chr_equal = QPushButton("Equal")
+        self.btn_chr_equal = QPushButton("Equal Split")
         self.btn_chr_equal.setProperty("class", "segment_btn")
         self.btn_chr_equal.setCheckable(True)
         self.btn_chr_equal.clicked.connect(lambda: self.set_chrome_sizing("Equal Size"))
-        row1.addWidget(self.btn_chr_equal)
+        line2.addWidget(self.btn_chr_equal)
 
         self.btn_chr_432 = QPushButton("432 px")
         self.btn_chr_432.setProperty("class", "segment_btn")
         self.btn_chr_432.setCheckable(True)
         self.btn_chr_432.clicked.connect(lambda: self.set_chrome_sizing("432px"))
-        row1.addWidget(self.btn_chr_432)
+        line2.addWidget(self.btn_chr_432)
 
         self.btn_chr_590 = QPushButton("590 px")
         self.btn_chr_590.setProperty("class", "segment_btn")
         self.btn_chr_590.setCheckable(True)
         self.btn_chr_590.clicked.connect(lambda: self.set_chrome_sizing("590px"))
-        row1.addWidget(self.btn_chr_590)
+        line2.addWidget(self.btn_chr_590)
 
-        row1.addStretch()
-        pref_layout.addLayout(row1)
+        pref_layout.addLayout(line2)
 
-        # Row 2: Corner Popup Position (when 1 app + media)
-        row2 = QHBoxLayout()
-        lbl_crn = QLabel("Popup Corner (1 App + Media):")
+        # Line 3: Corner Popup Position (1 App + Media)
+        line3 = QHBoxLayout()
+        lbl_crn = QLabel("Popup Corner (1 App + Media)")
         lbl_crn.setObjectName("card_title")
-        row2.addWidget(lbl_crn)
+        line3.addWidget(lbl_crn)
+        line3.addStretch()
 
         self.corner_btns = {}
         for c_name in ["Bottom-Right", "Bottom-Left", "Top-Right", "Top-Left"]:
@@ -227,14 +216,13 @@ class MainWindow(QMainWindow):
             btn.setCheckable(True)
             btn.clicked.connect(lambda checked, c=c_name: self.set_popup_corner(c))
             self.corner_btns[c_name] = btn
-            row2.addWidget(btn)
+            line3.addWidget(btn)
 
-        row2.addStretch()
-        pref_layout.addLayout(row2)
+        pref_layout.addLayout(line3)
 
         main_layout.addWidget(pref_card)
 
-        # 5. Aspect Ratio Categories Card
+        # 4. Aspect Ratio Categories Card
         profiles_card = QFrame()
         profiles_card.setObjectName("card")
         profiles_layout = QVBoxLayout(profiles_card)
@@ -247,7 +235,7 @@ class MainWindow(QMainWindow):
         header_row.addWidget(prof_heading)
         header_row.addStretch()
 
-        # Only one primary "Add Aspect Ratio" button upfront!
+        # Single primary "+ Add Aspect Ratio" action upfront
         btn_add_aspect_ratio = QPushButton("+ Add Aspect Ratio")
         btn_add_aspect_ratio.setObjectName("secondary_action")
         btn_add_aspect_ratio.clicked.connect(self.add_aspect_ratio_dialog)
@@ -267,7 +255,7 @@ class MainWindow(QMainWindow):
 
         main_layout.addWidget(profiles_card, 1)
 
-        # 6. Bottom Actions Footer
+        # 5. Bottom Actions Footer
         footer = QHBoxLayout()
         snap_key = self.keybindings.get("snap_modifier", "Ctrl")
         self.tip_label = QLabel(f"Hold {snap_key} while dragging any window to snap.")
@@ -333,7 +321,6 @@ class MainWindow(QMainWindow):
             self.status_detail.setText("Chrome and VS Code divide your workspace evenly.")
 
     def render_profiles_list(self):
-        # Clear existing rows
         while self.profiles_list_layout.count():
             item = self.profiles_list_layout.takeAt(0)
             if item.widget():
@@ -440,6 +427,20 @@ class MainWindow(QMainWindow):
             self.tip_label.setText(f"Hold {snap_key} while dragging any window to snap.")
             self.save_to_disk()
 
+    def showEvent(self, event):
+        super().showEvent(event)
+        self.show_overlay()
+
+    def show_overlay(self):
+        zones_data = self._get_current_zones_with_rects()
+        screen_geo = self.screen().geometry()
+        if getattr(self, "overlay_preview", None):
+            self.overlay_preview.set_zones(zones_data, screen_geo)
+            self.overlay_preview.show()
+        if self.isVisible():
+            self.raise_()
+            self.activateWindow()
+
     def load_data(self):
         config = load_config(CONFIG_PATH)
         if config:
@@ -493,9 +494,28 @@ class MainWindow(QMainWindow):
     def update_dimensions_display(self):
         zones_data = self._get_current_zones_with_rects()
         screen_geo = self.screen().geometry()
-        self.live_preview.update_layout(zones_data, screen_geo.width(), screen_geo.height())
+        if getattr(self, "overlay_preview", None):
+            self.overlay_preview.set_zones(zones_data, screen_geo)
+            if self.isVisible() and not self.isMinimized():
+                self.overlay_preview.show()
+                self.raise_()
         if hasattr(self, "display_label"):
             self.display_label.setText(f"{screen_geo.width()} × {screen_geo.height()}")
+
+    def changeEvent(self, event):
+        super().changeEvent(event)
+        if event.type() == QEvent.Type.WindowStateChange:
+            if getattr(self, "overlay_preview", None):
+                if self.isMinimized():
+                    self.overlay_preview.hide()
+                else:
+                    self.overlay_preview.show()
+                    self.raise_()
+
+    def closeEvent(self, event):
+        if getattr(self, "overlay_preview", None):
+            self.overlay_preview.close()
+        super().closeEvent(event)
 
     def save_to_disk(self):
         zones_with_rects = self._get_current_zones_with_rects()

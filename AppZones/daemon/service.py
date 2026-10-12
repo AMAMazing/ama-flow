@@ -1,13 +1,18 @@
 import sys
+import os
 import signal
 import ctypes
-from PyQt6.QtWidgets import QApplication
+import subprocess
+from PyQt6.QtWidgets import QApplication, QSystemTrayIcon, QMenu, QStyle
 from PyQt6.QtCore import QObject, QTimer, QRect
-from PyQt6.QtGui import QCursor
+from PyQt6.QtGui import QCursor, QIcon, QAction
 
 try:
     from ..core.config import (
         CONFIG_PATH,
+        APP_DIR,
+        GUI_SCRIPT,
+        MAIN_SCRIPT,
         load_config,
         parse_hotkey,
         parse_modifier_vk,
@@ -28,6 +33,9 @@ try:
 except (ImportError, ValueError):
     from core.config import (
         CONFIG_PATH,
+        APP_DIR,
+        GUI_SCRIPT,
+        MAIN_SCRIPT,
         load_config,
         parse_hotkey,
         parse_modifier_vk,
@@ -48,6 +56,80 @@ except (ImportError, ValueError):
 
 from .overlay import OverlayWidget
 from .hotkey import HotkeyFilter
+
+def get_pythonw_executable():
+    exec_dir = os.path.dirname(sys.executable)
+    pyw = os.path.join(exec_dir, "pythonw.exe")
+    if os.path.exists(pyw):
+        return pyw
+    return sys.executable
+
+def launch_gui():
+    existing = find_window_by_title("AppZones")
+    if existing:
+        user32 = ctypes.windll.user32
+        user32.ShowWindow(existing, 9)
+        user32.SetForegroundWindow(existing)
+        return
+
+    py_exec = get_pythonw_executable()
+    DETACHED_PROCESS = 0x00000008
+    CREATE_NO_WINDOW = 0x08000000
+    try:
+        subprocess.Popen(
+            [py_exec, GUI_SCRIPT],
+            creationflags=DETACHED_PROCESS | CREATE_NO_WINDOW,
+            close_fds=True
+        )
+    except Exception as e:
+        print(f"Failed to launch GUI: {e}", flush=True)
+
+def get_startup_shortcut_path():
+    appdata = os.environ.get("APPDATA")
+    if appdata:
+        return os.path.join(appdata, "Microsoft", "Windows", "Start Menu", "Programs", "Startup", "AppZones.lnk")
+    return None
+
+def is_startup_enabled():
+    path = get_startup_shortcut_path()
+    return path is not None and os.path.exists(path)
+
+def set_startup_enabled(enable: bool):
+    path = get_startup_shortcut_path()
+    if not path:
+        return False
+    if enable:
+        try:
+            py_exec = get_pythonw_executable()
+            icon_path = os.path.join(APP_DIR, "appzones_icon.ico")
+            powershell_cmd = (
+                f'$WshShell = New-Object -ComObject WScript.Shell; '
+                f'$Shortcut = $WshShell.CreateShortcut("{path}"); '
+                f'$Shortcut.TargetPath = "{py_exec}"; '
+                f'$Shortcut.Arguments = \'"{MAIN_SCRIPT}"\'; '
+                f'$Shortcut.WorkingDirectory = "{APP_DIR}"; '
+                f'$Shortcut.IconLocation = "{icon_path}, 0"; '
+                f'$Shortcut.Description = "AppZones Window Manager Background Service"; '
+                f'$Shortcut.Save()'
+            )
+            CREATE_NO_WINDOW = 0x08000000
+            subprocess.run(
+                ["powershell", "-NoProfile", "-Command", powershell_cmd],
+                creationflags=CREATE_NO_WINDOW,
+                check=True
+            )
+            return True
+        except Exception as e:
+            print(f"Failed to enable startup: {e}", flush=True)
+            return False
+    else:
+        try:
+            if os.path.exists(path):
+                os.remove(path)
+            return True
+        except Exception as e:
+            print(f"Failed to disable startup: {e}", flush=True)
+            return False
 
 def get_active_zones_for_current_state(config=None):
     if config is None:
@@ -185,6 +267,7 @@ def run_daemon():
         sys.exit(0)
 
     app = QApplication(sys.argv)
+    app.setQuitOnLastWindowClosed(False)
     signal.signal(signal.SIGINT, signal.SIG_DFL)
 
     apply_layout_statically()
@@ -196,7 +279,7 @@ def run_daemon():
     snap_mod_str = keybindings.get("snap_modifier", "Ctrl")
 
     app._hotkey_filter = HotkeyFilter(
-        on_open_gui=None,
+        on_open_gui=launch_gui,
         on_apply_layout=apply_layout_statically
     )
     app.installNativeEventFilter(app._hotkey_filter)
@@ -211,10 +294,66 @@ def run_daemon():
 
     app._daemon = AppZonesDaemon()
 
+    # System Tray Integration
+    icon_path = os.path.join(APP_DIR, "appzones_icon.ico")
+    tray_icon = QSystemTrayIcon(app)
+    if os.path.exists(icon_path):
+        tray_icon.setIcon(QIcon(icon_path))
+    else:
+        tray_icon.setIcon(app.style().standardIcon(QStyle.StandardPixmap.SP_DesktopIcon))
+
+    tray_icon.setToolTip("AppZones - Window Manager (Running in Background)")
+
+    menu = QMenu()
+
+    action_settings = QAction("Open Settings", menu)
+    action_settings.triggered.connect(launch_gui)
+    menu.addAction(action_settings)
+
+    action_apply = QAction("Apply Layout", menu)
+    action_apply.triggered.connect(apply_layout_statically)
+    menu.addAction(action_apply)
+
+    menu.addSeparator()
+
+    action_startup = QAction("Start with Windows", menu)
+    action_startup.setCheckable(True)
+    action_startup.setChecked(is_startup_enabled())
+    def on_startup_toggle(checked):
+        set_startup_enabled(checked)
+        action_startup.setChecked(is_startup_enabled())
+    action_startup.toggled.connect(on_startup_toggle)
+    menu.addAction(action_startup)
+
+    menu.addSeparator()
+
+    action_quit = QAction("Exit AppZones", menu)
+    action_quit.triggered.connect(app.quit)
+    menu.addAction(action_quit)
+
+    tray_icon.setContextMenu(menu)
+    tray_icon.activated.connect(
+        lambda reason: launch_gui() if reason in (
+            QSystemTrayIcon.ActivationReason.Trigger,
+            QSystemTrayIcon.ActivationReason.DoubleClick
+        ) else None
+    )
+    tray_icon.show()
+
+    # Display balloon notification to confirm active background state
+    tray_icon.showMessage(
+        "AppZones Active",
+        f"Running silently in background.\nPress {format_hotkey_display(open_gui_str)} for settings or {format_hotkey_display(apply_layout_str)} to apply layout.",
+        QSystemTrayIcon.MessageIcon.Information,
+        2500
+    )
+
+    app._tray_icon = tray_icon
+
     print("\n-------------------------------------------------------------", flush=True)
     print(" AppZones Daemon is ACTIVE and listening in the background! ", flush=True)
     print("-------------------------------------------------------------", flush=True)
-    print(f" 1. Press '{format_hotkey_display(open_gui_str)}' at any time to open the AppZones Editor.", flush=True)
+    print(f" 1. Press '{format_hotkey_display(open_gui_str)}' or click the tray icon to open Settings.", flush=True)
     print(f" 2. Press '{format_hotkey_display(apply_layout_str)}' to instantly apply the current layout.", flush=True)
     print(f" 3. Hold '{snap_mod_str}' while dragging any window to reveal your zones and snap it.", flush=True)
     print("-------------------------------------------------------------\n", flush=True)

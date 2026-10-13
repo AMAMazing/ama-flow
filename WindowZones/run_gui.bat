@@ -1,0 +1,3 @@
+@echo off
+echo Launching WindowZones GUI Control Panel...
+python gui.py

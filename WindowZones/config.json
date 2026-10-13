@@ -1,0 +1,97 @@
+{
+  "mode": "3_window",
+  "keybindings": {
+    "open_gui": "Ctrl+Win+Z",
+    "snap_modifier": "Ctrl",
+    "apply_layout": "Win+Shift+Z"
+  },
+  "layout_settings": {
+    "vscode_side": "Right",
+    "chrome_sizing": "432px",
+    "active_media_profile": "Auto (Smart Detect)",
+    "chrome_sizes": {
+      "Equal Size": "equal",
+      "432px": "432",
+      "590px": "590"
+    },
+    "media_profiles": {
+      "16:9 (PiP)": {
+        "aspect_ratio": "16:9",
+        "apps": [
+          "Picture in picture"
+        ]
+      },
+      "App": {
+        "aspect_ratio": "1.68:1",
+        "apps": [
+          "YouTube",
+          "Netflix",
+          "Disney+",
+          "Paramount+"
+        ]
+      },
+      "MYAEW (3:2)": {
+        "aspect_ratio": "3:2",
+        "apps": [
+          "MYAEW"
+        ]
+      },
+      "Square (1:1)": {
+        "aspect_ratio": "1:1",
+        "apps": [
+          "YouTube Music",
+          "Spotify"
+        ]
+      }
+    }
+  },
+  "corner_settings": {
+    "fullscreen_app": "Visual Studio Code",
+    "media_app": "Picture in picture",
+    "corner": "Bottom-Left",
+    "max_width": 640,
+    "max_height": 360,
+    "active_media_profile": "16:9 (PiP)"
+  },
+  "zones": [
+    {
+      "window_title": "YouTube - FULL EPISODE: Lucha Libre AAA, Oct. 10, 2026 - YouTube",
+      "role": "media",
+      "pos": "Bottom-Left",
+      "stat": "Aspect Ratio",
+      "val": "1.68:1",
+      "rect": {
+        "x": 0,
+        "y": 432,
+        "width": 1088,
+        "height": 648
+      }
+    },
+    {
+      "window_title": "Google Chrome",
+      "role": "chrome",
+      "pos": "Top-Left",
+      "stat": "Height (px)",
+      "val": "432",
+      "rect": {
+        "x": 0,
+        "y": 0,
+        "width": 1088,
+        "height": 432
+      }
+    },
+    {
+      "window_title": "Visual Studio Code",
+      "role": "vscode",
+      "pos": "Right",
+      "stat": "Fill (Any)",
+      "val": "",
+      "rect": {
+        "x": 1088,
+        "y": 0,
+        "width": 832,
+        "height": 1080
+      }
+    }
+  ]
+}

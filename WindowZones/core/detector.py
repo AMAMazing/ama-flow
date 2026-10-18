@@ -31,7 +31,7 @@ class MediaDetector:
     """
     Robust detector for Chrome Picture-in-Picture and standalone PWA windows.
     Utilizes Windows UIAutomation COM interfaces to differentiate standalone PWAs
-    from standard Chrome browsing tabs.
+    from standard Chrome browsing tabs, with resilient fallbacks.
     """
     def __init__(self):
         self._uia = None
@@ -43,20 +43,35 @@ class MediaDetector:
         if not self._initialized:
             try:
                 import comtypes
+                # Immunize against Windows OS update mtime changes breaking comtypes typelib cache
+                try:
+                    import comtypes._tlib_version_checker
+                    comtypes._tlib_version_checker._check_version = lambda actual, tlib_cached_mtime=None: None
+                except Exception:
+                    pass
+
                 import comtypes.client
                 comtypes.CoInitialize()
-                from comtypes.gen import UIAutomationClient
+
+                try:
+                    from comtypes.gen import UIAutomationClient
+                except Exception:
+                    # Regenerate UIAutomation wrapper on the fly if missing or outdated
+                    comtypes.client.GetModule("UIAutomationCore.dll")
+                    from comtypes.gen import UIAutomationClient
+
                 self._uia = comtypes.client.CreateObject(
                     UIAutomationClient.CUIAutomation,
                     interface=UIAutomationClient.IUIAutomation
                 )
+
                 self._cond_toolbar = self._uia.CreatePropertyCondition(30012, "WebAppFrameToolbarView")
                 self._cond_menu_btn = self._uia.CreatePropertyCondition(30012, "WebAppMenuButton")
                 self._initialized = True
             except Exception as e:
                 self._initialized = False
 
-    def get_open_chrome_and_pwa_windows(self):
+    def get_open_chrome_and_pwa_windows(self, known_apps=None):
         """
         Enumerates all visible Chrome_WidgetWin_1 windows and categorizes them.
         Returns a list of dicts:
@@ -65,6 +80,17 @@ class MediaDetector:
         self._init_com()
         found = []
         TreeScope_Descendants = 4
+
+        # Compile list of known PWA target app names to assist fallback detection
+        target_apps = [
+            "myaew", "youtube", "netflix", "disney+", "disney plus",
+            "paramount+", "spotify", "youtube music"
+        ]
+        if known_apps:
+            for app in known_apps:
+                app_lower = app.lower()
+                if app_lower not in target_apps:
+                    target_apps.append(app_lower)
 
         def enum_cb(hwnd, lparam):
             if not user32.IsWindowVisible(hwnd):
@@ -127,6 +153,20 @@ class MediaDetector:
                 except Exception:
                     pass
 
+            # 3. Fallback heuristic: Check if window title directly identifies a known PWA
+            # E.g., standalone PWA window titles like "MYAEW", "YouTube", or titles containing them
+            for known in target_apps:
+                if known in lower_title:
+                    found.append({
+                        "hwnd": hwnd,
+                        "title": title,
+                        "is_pip": False,
+                        "is_pwa": True,
+                        "app_name": title,
+                        "topmost": is_topmost
+                    })
+                    return True
+
             # Standard Chrome window (not a PWA or PiP)
             found.append({
                 "hwnd": hwnd,
@@ -150,7 +190,14 @@ class MediaDetector:
             or (None, None, None, None, None) if no media window is open.
         """
         profiles = media_profiles or DEFAULT_APP_PROFILES
-        windows = self.get_open_chrome_and_pwa_windows()
+
+        # Extract all apps defined in configuration
+        configured_apps = []
+        for prof_data in profiles.values():
+            if isinstance(prof_data, dict):
+                configured_apps.extend(prof_data.get("apps", []))
+
+        windows = self.get_open_chrome_and_pwa_windows(known_apps=configured_apps)
 
         # Check for media windows (PiP or PWA)
         media_candidates = [w for w in windows if w["is_pip"] or w["is_pwa"]]
@@ -161,25 +208,30 @@ class MediaDetector:
         media_candidates.sort(key=lambda w: (not w["is_pip"], not w["topmost"]))
         chosen = media_candidates[0]
         app_name = chosen["app_name"]
+        win_title = chosen["title"]
 
-        # Match app_name to a profile
+        # Match app_name or win_title to a profile
         matched_profile_name = None
         matched_aspect_ratio = "16:9"
 
         app_name_lower = app_name.lower()
+        title_lower = win_title.lower()
 
         for prof_name, prof_data in profiles.items():
             if isinstance(prof_data, dict):
                 ar = prof_data.get("aspect_ratio", "16:9")
                 apps = prof_data.get("apps", [])
                 for a in apps:
-                    if a.lower() == app_name_lower or a.lower() in app_name_lower or app_name_lower in a.lower():
+                    a_lower = a.lower()
+                    if (a_lower in app_name_lower or app_name_lower in a_lower or
+                        a_lower in title_lower or title_lower in a_lower):
                         matched_profile_name = prof_name
                         matched_aspect_ratio = ar
                         break
             elif isinstance(prof_data, str):
                 # Legacy simple string format e.g. "16:9"
-                if prof_name.lower() in app_name_lower or app_name_lower in prof_name.lower():
+                if (prof_name.lower() in app_name_lower or app_name_lower in prof_name.lower() or
+                    prof_name.lower() in title_lower or title_lower in prof_name.lower()):
                     matched_profile_name = prof_name
                     matched_aspect_ratio = prof_data
                     break
@@ -191,10 +243,10 @@ class MediaDetector:
             if chosen["is_pip"]:
                 matched_profile_name = "16:9 (PiP)"
                 matched_aspect_ratio = "16:9"
-            elif "aew" in app_name_lower:
+            elif "aew" in app_name_lower or "aew" in title_lower:
                 matched_profile_name = "MYAEW (3:2)"
                 matched_aspect_ratio = "3:2"
-            elif "music" in app_name_lower or "spotify" in app_name_lower:
+            elif "music" in app_name_lower or "spotify" in app_name_lower or "music" in title_lower or "spotify" in title_lower:
                 matched_profile_name = "Square (1:1)"
                 matched_aspect_ratio = "1:1"
             else:

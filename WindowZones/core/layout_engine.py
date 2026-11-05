@@ -89,7 +89,7 @@ def calculate_fullscreen_corner_rects(corner_settings, media_profiles, screen_w,
     ]
 
 
-def calculate_rects(zones, screen_w, screen_h, chrome_val="equal"):
+def calculate_rects(zones, screen_w, screen_h, secondary_val="equal"):
     rem_x, rem_y, rem_w, rem_h = 0, 0, screen_w, screen_h
 
     def get_val(z, max_val, is_width=True):
@@ -161,11 +161,11 @@ def calculate_rects(zones, screen_w, screen_h, chrome_val="equal"):
 
             if "Height" in top_stat and "Aspect Ratio" in bot_stat:
                 ar = parse_aspect_ratio(bot_zone.get("val", ""))
-                if chrome_val == "equal":
+                if secondary_val == "equal":
                     top_h = total_h // 2
                     bot_h = total_h - top_h
                 else:
-                    raw = str(chrome_val).strip()
+                    raw = str(secondary_val).strip()
                     if "%" in raw:
                         match = re.search(r"(\d+(\.\d+)?)", raw)
                         pct = float(match.group(1)) if match else 50.0
@@ -177,11 +177,11 @@ def calculate_rects(zones, screen_w, screen_h, chrome_val="equal"):
                 col_w = int(bot_h * ar)
             elif "Height" in bot_stat and "Aspect Ratio" in top_stat:
                 ar = parse_aspect_ratio(top_zone.get("val", ""))
-                if chrome_val == "equal":
+                if secondary_val == "equal":
                     bot_h = total_h // 2
                     top_h = total_h - bot_h
                 else:
-                    raw = str(chrome_val).strip()
+                    raw = str(secondary_val).strip()
                     if "%" in raw:
                         match = re.search(r"(\d+(\.\d+)?)", raw)
                         pct = float(match.group(1)) if match else 50.0
@@ -265,34 +265,34 @@ def calculate_rects(zones, screen_w, screen_h, chrome_val="equal"):
 
 def calculate_smart_layout(config_or_data, screen_w, screen_h, open_windows=None):
     """
-    Computes active zones based on currently open windows:
-      - 2 windows open where 1 is media:
-          -> Fullscreen for the open main app (VS Code or Chrome) + Corner Popup for Media (with its aspect ratio).
-      - 3 windows open (Media + VS Code + Chrome):
-          -> 3-Window Layout (VS Code on one side, Chrome + Media with aspect ratio on the other side).
-      - No media window open:
-          -> 50/50 split between Chrome and VS Code (or Fullscreen if only 1 is open).
+    Computes active zones based on currently open windows utilizing Semantic App Roles (Primary/Secondary).
+      - Primary App: Takes the large/fill space. (Defaults to VS Code or 1st Chrome window)
+      - Secondary App: Takes the shared space alongside Media. (Defaults to 2nd Chrome window)
     """
     layout_settings = config_or_data.get("layout_settings", {})
     corner_settings = config_or_data.get("corner_settings", {})
+    
+    # Legacy fallbacks
     chrome_sizes = config_or_data.get("chrome_sizes", layout_settings.get("chrome_sizes", {}))
     media_profiles = config_or_data.get("media_profiles", layout_settings.get("media_profiles", {}))
-    app_titles = config_or_data.get("app_titles", {})
+    
+    # Semantic Roles Config
+    app_roles = layout_settings.get("app_roles", {
+        "primary": ["Visual Studio Code", "Google Chrome"],
+        "secondary": ["Google Chrome"]
+    })
+    
+    primary_candidates = [a.lower() for a in app_roles.get("primary", ["Visual Studio Code"])]
+    secondary_candidates = [a.lower() for a in app_roles.get("secondary", ["Google Chrome"])]
 
-    code_title = app_titles.get("vscode") or layout_settings.get("vscode_title") or "Visual Studio Code"
-    chrome_title = app_titles.get("chrome") or layout_settings.get("chrome_title") or "Google Chrome"
-
-    vscode_side = layout_settings.get("vscode_side", "Right")
+    primary_side = layout_settings.get("primary_side") or layout_settings.get("vscode_side", "Right")
     active_profile = layout_settings.get("active_media_profile", "Auto (Smart Detect)")
 
     is_auto = (active_profile in ["Auto (Smart Detect)", "auto"])
 
     # Detect media window
-    detected_app_name = None
-    detected_hwnd = None
-    detected_title = None
-    matched_ar = "16:9"
-    matched_prof = None
+    detected_app_name, detected_hwnd, detected_title = None, None, None
+    matched_ar, matched_prof = "16:9", None
 
     if is_auto:
         detected_app_name, detected_hwnd, detected_title, matched_ar, matched_prof = detector.detect_active_media(media_profiles)
@@ -312,17 +312,38 @@ def calculate_smart_layout(config_or_data, screen_w, screen_h, open_windows=None
         except Exception:
             open_windows = []
 
-    is_vsc_open = False
-    is_chrome_open = False
+    primary_hwnd, primary_title = None, None
+    secondary_hwnd, secondary_title = None, None
 
-    for win_title, hwnd in open_windows:
-        tl = win_title.lower()
-        if "visual studio code" in tl:
-            is_vsc_open = True
-        elif "google chrome" in tl and not ("picture in picture" in tl or "pip" in tl):
-            # Check it's not the detected media window
-            if not detected_hwnd or hwnd != detected_hwnd:
-                is_chrome_open = True
+    # 1) Find Primary App
+    for cand in primary_candidates:
+        if primary_hwnd: break
+        for win_title, hwnd in open_windows:
+            if detected_hwnd and hwnd == detected_hwnd: continue # Skip media
+            if cand in win_title.lower():
+                primary_hwnd = hwnd
+                primary_title = win_title
+                break
+
+    # 2) Find Secondary App (Ensure it's not the exact same window instance as Primary)
+    for cand in secondary_candidates:
+        if secondary_hwnd: break
+        for win_title, hwnd in open_windows:
+            if detected_hwnd and hwnd == detected_hwnd: continue # Skip media
+            if primary_hwnd and hwnd == primary_hwnd: continue # Skip primary window instance
+            if cand in win_title.lower():
+                secondary_hwnd = hwnd
+                secondary_title = win_title
+                break
+
+    is_primary_open = bool(primary_hwnd)
+    is_secondary_open = bool(secondary_hwnd)
+
+    # Fallbacks for titles if not open
+    if not primary_title:
+        primary_title = app_roles.get("primary", ["Visual Studio Code"])[0]
+    if not secondary_title:
+        secondary_title = app_roles.get("secondary", ["Google Chrome"])[0]
 
     # Check if manual mode override
     mode = config_or_data.get("mode", "3_window")
@@ -335,10 +356,10 @@ def calculate_smart_layout(config_or_data, screen_w, screen_h, open_windows=None
     if detected_app_name:
         media_win_title = detected_title or detected_app_name or "Picture in picture"
 
-        # Case A: ONLY 1 MAIN APP IS OPEN + MEDIA (2 windows total: media + vscode OR media + chrome)
+        # Case A: ONLY 1 MAIN APP IS OPEN + MEDIA (2 windows total)
         # -> FULLSCREEN + CORNER POPUP!
-        if (is_vsc_open and not is_chrome_open) or (is_chrome_open and not is_vsc_open):
-            fs_app_name = code_title if is_vsc_open else chrome_title
+        if (is_primary_open and not is_secondary_open) or (is_secondary_open and not is_primary_open):
+            fs_app_name = primary_title if is_primary_open else secondary_title
             return calculate_fullscreen_corner_rects(
                 corner_settings,
                 media_profiles,
@@ -349,14 +370,14 @@ def calculate_smart_layout(config_or_data, screen_w, screen_h, open_windows=None
                 media_title_override=media_win_title
             )
 
-        # Case B: BOTH CHROME AND VS CODE ARE OPEN (3 windows) OR PREVIEW MODE
+        # Case B: BOTH PRIMARY AND SECONDARY ARE OPEN (3 windows) OR PREVIEW MODE
         # -> 3-WINDOW SETUP WITH MEDIA ASPECT RATIO
-        other_side = "Left" if vscode_side == "Right" else "Right"
+        other_side = "Left" if primary_side == "Right" else "Right"
         top_pos = f"Top-{other_side}"
         bot_pos = f"Bottom-{other_side}"
 
-        active_chrome = layout_settings.get("chrome_sizing", "432px")
-        chrome_val = chrome_sizes.get(active_chrome, "432")
+        active_secondary_size = layout_settings.get("secondary_sizing") or layout_settings.get("chrome_sizing", "432px")
+        secondary_val = chrome_sizes.get(active_secondary_size, "432")
 
         zones = [
             {
@@ -367,21 +388,21 @@ def calculate_smart_layout(config_or_data, screen_w, screen_h, open_windows=None
                 "val": matched_ar
             },
             {
-                "window_title": chrome_title,
-                "role": "chrome",
+                "window_title": secondary_title,
+                "role": "secondary",
                 "pos": top_pos,
-                "stat": "Height (px)" if chrome_val == "equal" else ("Height (%)" if "%" in str(chrome_val) else "Height (px)"),
-                "val": "" if chrome_val == "equal" else str(chrome_val)
+                "stat": "Height (px)" if secondary_val == "equal" else ("Height (%)" if "%" in str(secondary_val) else "Height (px)"),
+                "val": "" if secondary_val == "equal" else str(secondary_val)
             },
             {
-                "window_title": code_title,
-                "role": "vscode",
-                "pos": vscode_side,
+                "window_title": primary_title,
+                "role": "primary",
+                "pos": primary_side,
                 "stat": "Fill (Any)",
                 "val": ""
             }
         ]
-        return calculate_rects(zones, screen_w, screen_h, chrome_val=chrome_val)
+        return calculate_rects(zones, screen_w, screen_h, secondary_val=secondary_val)
 
     # =========================================================================
     # SCENARIO 2: NO MEDIA OPEN -> 50/50 SPLIT OR FULLSCREEN
@@ -389,32 +410,32 @@ def calculate_smart_layout(config_or_data, screen_w, screen_h, open_windows=None
     half_w = screen_w // 2
     rem_w = screen_w - half_w
 
-    if vscode_side == "Right":
-        chrome_rect = {"x": 0, "y": 0, "width": half_w, "height": screen_h}
-        vscode_rect = {"x": half_w, "y": 0, "width": rem_w, "height": screen_h}
-        chrome_pos = "Left"
-        vscode_pos = "Right"
+    if primary_side == "Right":
+        secondary_rect = {"x": 0, "y": 0, "width": half_w, "height": screen_h}
+        primary_rect = {"x": half_w, "y": 0, "width": rem_w, "height": screen_h}
+        secondary_pos = "Left"
+        primary_pos = "Right"
     else:
-        vscode_rect = {"x": 0, "y": 0, "width": half_w, "height": screen_h}
-        chrome_rect = {"x": half_w, "y": 0, "width": rem_w, "height": screen_h}
-        vscode_pos = "Left"
-        chrome_pos = "Right"
+        primary_rect = {"x": 0, "y": 0, "width": half_w, "height": screen_h}
+        secondary_rect = {"x": half_w, "y": 0, "width": rem_w, "height": screen_h}
+        primary_pos = "Left"
+        secondary_pos = "Right"
 
     return [
         {
-            "window_title": chrome_title,
-            "role": "chrome",
-            "pos": chrome_pos,
+            "window_title": secondary_title,
+            "role": "secondary",
+            "pos": secondary_pos,
             "stat": "Width (50%)",
             "val": "50%",
-            "rect": chrome_rect
+            "rect": secondary_rect
         },
         {
-            "window_title": code_title,
-            "role": "vscode",
-            "pos": vscode_pos,
+            "window_title": primary_title,
+            "role": "primary",
+            "pos": primary_pos,
             "stat": "Width (50%)",
             "val": "50%",
-            "rect": vscode_rect
+            "rect": primary_rect
         }
     ]

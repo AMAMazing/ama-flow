@@ -38,40 +38,62 @@
           "Spotify"
         ]
       }
+    },
+    "app_roles": {
+      "primary": [
+        "Visual Studio Code",
+        "Google Chrome"
+      ],
+      "secondary": [
+        "Google Chrome"
+      ]
     }
   },
   "corner_settings": {
     "fullscreen_app": "Visual Studio Code",
     "media_app": "Picture in picture",
-    "corner": "Bottom-Left",
+    "corner": "Top-Right",
     "max_width": 640,
     "max_height": 360,
     "active_media_profile": "16:9 (PiP)"
   },
   "zones": [
     {
-      "window_title": "Google Chrome",
-      "role": "chrome",
-      "pos": "Left",
-      "stat": "Width (50%)",
-      "val": "50%",
+      "window_title": "Netflix",
+      "role": "media",
+      "pos": "Bottom-Left",
+      "stat": "Aspect Ratio",
+      "val": "1.68:1",
       "rect": {
         "x": 0,
-        "y": 0,
-        "width": 960,
-        "height": 1080
+        "y": 432,
+        "width": 1088,
+        "height": 648
       }
     },
     {
-      "window_title": "Visual Studio Code",
-      "role": "vscode",
-      "pos": "Right",
-      "stat": "Width (50%)",
-      "val": "50%",
+      "window_title": "New Tab - Google Chrome",
+      "role": "secondary",
+      "pos": "Top-Left",
+      "stat": "Height (px)",
+      "val": "432",
       "rect": {
-        "x": 960,
+        "x": 0,
         "y": 0,
-        "width": 960,
+        "width": 1088,
+        "height": 432
+      }
+    },
+    {
+      "window_title": "AMAMazing (AMA Mazing) - Google Chrome",
+      "role": "primary",
+      "pos": "Right",
+      "stat": "Fill (Any)",
+      "val": "",
+      "rect": {
+        "x": 1088,
+        "y": 0,
+        "width": 832,
         "height": 1080
       }
     }

@@ -108,7 +108,7 @@ def set_startup_enabled(enable: bool):
                 f'$WshShell = New-Object -ComObject WScript.Shell; '
                 f'$Shortcut = $WshShell.CreateShortcut("{path}"); '
                 f'$Shortcut.TargetPath = "{py_exec}"; '
-                f'$Shortcut.Arguments = \'"{MAIN_SCRIPT}"\'; '
+                f'$Shortcut.Arguments = \'{MAIN_SCRIPT}\'; '
                 f'$Shortcut.WorkingDirectory = "{APP_DIR}"; '
                 f'$Shortcut.IconLocation = "{icon_path}, 0"; '
                 f'$Shortcut.Description = "WindowZones Window Manager Background Service"; '
@@ -164,6 +164,10 @@ def apply_layout_statically():
     media_profiles = config.get("layout_settings", {}).get("media_profiles", {})
     detected_app, detected_hwnd, detected_title, ar, prof = detector.detect_active_media(media_profiles)
 
+    used_hwnds = set()
+    if detected_hwnd:
+        used_hwnds.add(detected_hwnd)
+
     for zone in zones:
         role = zone.get("role", "")
         title = zone.get("window_title", "")
@@ -176,8 +180,19 @@ def apply_layout_statically():
             hwnd = detected_hwnd
         else:
             hwnd = find_window_by_title(title)
+            
+            # General fallback to prevent HWND collisions (same window assigned to multiple zones)
+            if hwnd in used_hwnds:
+                hwnd = None
+                
+            if not hwnd:
+                for w_title, w_hwnd in get_open_windows():
+                    if w_hwnd not in used_hwnds and title.lower() in w_title.lower():
+                        hwnd = w_hwnd
+                        break
 
         if hwnd:
+            used_hwnds.add(hwnd)
             print(f"Positioning '{title}' ({role}) to {rect}", flush=True)
             position_window(hwnd, rect)
         else:

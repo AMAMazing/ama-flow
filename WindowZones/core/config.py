@@ -36,8 +36,12 @@ DEFAULT_MEDIA_PROFILES = {
 }
 
 DEFAULT_LAYOUT_SETTINGS = {
-    "vscode_side": "Right",
-    "chrome_sizing": "432px",
+    "app_roles": {
+        "primary": ["Visual Studio Code", "Google Chrome"],
+        "secondary": ["Google Chrome"]
+    },
+    "primary_side": "Right",
+    "secondary_sizing": "432px",
     "active_media_profile": "Auto (Smart Detect)",
     "chrome_sizes": DEFAULT_CHROME_SIZES,
     "media_profiles": DEFAULT_MEDIA_PROFILES

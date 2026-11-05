@@ -10,9 +10,11 @@ from PyQt6.QtGui import QDrag
 try:
     from core.win_utils import get_open_windows
     from core.detector import detector
+    from core.config import load_config, CONFIG_PATH
 except (ImportError, ValueError):
     from ..core.win_utils import get_open_windows
     from ..core.detector import detector
+    from ..core.config import load_config, CONFIG_PATH
 
 
 class DraggableAppChip(QPushButton):
@@ -260,18 +262,34 @@ class AddAspectRatioDialog(QDialog):
 
         self.open_wins_data = []
         try:
+            config = load_config()
+            layout_settings = config.get("layout_settings", {})
+            app_roles = layout_settings.get("app_roles", {
+                "primary": ["Visual Studio Code", "Google Chrome"],
+                "secondary": ["Google Chrome"]
+            })
+            primary_candidates = [a.lower() for a in app_roles.get("primary", [])]
+            secondary_candidates = [a.lower() for a in app_roles.get("secondary", [])]
+            
             detected = detector.get_open_chrome_and_pwa_windows()
             general = get_open_windows()
             seen_hwnds = set()
+            
+            def is_core_app(t):
+                tl = t.lower()
+                if "windowzones" in tl or "appzones" in tl or "cline" in tl:
+                    return True
+                for p in primary_candidates:
+                    if p in tl: return True
+                return False
 
             for w in detected:
-                if w["hwnd"] not in seen_hwnds and "Visual Studio Code" not in w["app_name"] and "WindowZones" not in w["app_name"] and "AppZones" not in w["app_name"]:
+                if w["hwnd"] not in seen_hwnds and not is_core_app(w["app_name"]):
                     self.open_wins_data.append((w["app_name"], w["hwnd"]))
                     seen_hwnds.add(w["hwnd"])
 
             for title, hwnd in general:
-                lower_t = title.lower()
-                if hwnd not in seen_hwnds and "visual studio code" not in lower_t and "windowzones" not in lower_t and "appzones" not in lower_t and "cline" not in lower_t:
+                if hwnd not in seen_hwnds and not is_core_app(title):
                     self.open_wins_data.append((title, hwnd))
                     seen_hwnds.add(hwnd)
         except Exception:

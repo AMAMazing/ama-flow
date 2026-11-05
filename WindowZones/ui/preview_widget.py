@@ -96,10 +96,8 @@ class LiveLayoutPreview(QWidget):
 
             # Display short title
             short_title = title
-            if "visual studio code" in title.lower():
-                short_title = "VS Code"
-            elif "google chrome" in title.lower():
-                short_title = "Chrome"
+            if role:
+                short_title = role.capitalize()
             elif len(short_title) > 22:
                 short_title = short_title[:19] + "..."
 

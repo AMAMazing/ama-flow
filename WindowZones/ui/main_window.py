@@ -154,9 +154,9 @@ class MainWindow(QMainWindow):
         sec_title.setObjectName("section_heading")
         pref_layout.addWidget(sec_title)
 
-        # Line 1: VS Code Position
+        # Line 1: Primary App Position
         line1 = QHBoxLayout()
-        lbl_vsc = QLabel("Visual Studio Code Position")
+        lbl_vsc = QLabel("Primary App Position")
         lbl_vsc.setObjectName("card_title")
         line1.addWidget(lbl_vsc)
         line1.addStretch()
@@ -164,20 +164,20 @@ class MainWindow(QMainWindow):
         self.btn_side_left = QPushButton("Left")
         self.btn_side_left.setProperty("class", "segment_btn")
         self.btn_side_left.setCheckable(True)
-        self.btn_side_left.clicked.connect(lambda: self.set_vscode_side("Left"))
+        self.btn_side_left.clicked.connect(lambda: self.set_primary_side("Left"))
         line1.addWidget(self.btn_side_left)
 
         self.btn_side_right = QPushButton("Right")
         self.btn_side_right.setProperty("class", "segment_btn")
         self.btn_side_right.setCheckable(True)
-        self.btn_side_right.clicked.connect(lambda: self.set_vscode_side("Right"))
+        self.btn_side_right.clicked.connect(lambda: self.set_primary_side("Right"))
         line1.addWidget(self.btn_side_right)
 
         pref_layout.addLayout(line1)
 
-        # Line 2: Chrome Companion Size
+        # Line 2: Secondary App Size
         line2 = QHBoxLayout()
-        lbl_chr = QLabel("Chrome Companion Size (3-Window Setup)")
+        lbl_chr = QLabel("Secondary App Size (3-Window Setup)")
         lbl_chr.setObjectName("card_title")
         line2.addWidget(lbl_chr)
         line2.addStretch()
@@ -185,19 +185,19 @@ class MainWindow(QMainWindow):
         self.btn_chr_equal = QPushButton("Equal Split")
         self.btn_chr_equal.setProperty("class", "segment_btn")
         self.btn_chr_equal.setCheckable(True)
-        self.btn_chr_equal.clicked.connect(lambda: self.set_chrome_sizing("Equal Size"))
+        self.btn_chr_equal.clicked.connect(lambda: self.set_secondary_sizing("Equal Size"))
         line2.addWidget(self.btn_chr_equal)
 
         self.btn_chr_432 = QPushButton("432 px")
         self.btn_chr_432.setProperty("class", "segment_btn")
         self.btn_chr_432.setCheckable(True)
-        self.btn_chr_432.clicked.connect(lambda: self.set_chrome_sizing("432px"))
+        self.btn_chr_432.clicked.connect(lambda: self.set_secondary_sizing("432px"))
         line2.addWidget(self.btn_chr_432)
 
         self.btn_chr_590 = QPushButton("590 px")
         self.btn_chr_590.setProperty("class", "segment_btn")
         self.btn_chr_590.setCheckable(True)
-        self.btn_chr_590.clicked.connect(lambda: self.set_chrome_sizing("590px"))
+        self.btn_chr_590.clicked.connect(lambda: self.set_secondary_sizing("590px"))
         line2.addWidget(self.btn_chr_590)
 
         pref_layout.addLayout(line2)
@@ -269,14 +269,18 @@ class MainWindow(QMainWindow):
 
         main_layout.addLayout(footer)
 
-    def set_vscode_side(self, side):
+    def set_primary_side(self, side):
+        self.layout_settings["primary_side"] = side
+        # For backwards compatibility with older config
         self.layout_settings["vscode_side"] = side
         self.btn_side_left.setChecked(side == "Left")
         self.btn_side_right.setChecked(side == "Right")
         self.save_to_disk()
         self.update_dimensions_display()
 
-    def set_chrome_sizing(self, size_choice):
+    def set_secondary_sizing(self, size_choice):
+        self.layout_settings["secondary_sizing"] = size_choice
+        # For backwards compatibility
         self.layout_settings["chrome_sizing"] = size_choice
         self.btn_chr_equal.setChecked(size_choice == "Equal Size")
         self.btn_chr_432.setChecked(size_choice == "432px")
@@ -298,15 +302,45 @@ class MainWindow(QMainWindow):
     def update_detection_status(self):
         detected_app, detected_hwnd, detected_title, ar, prof_name = detector.detect_active_media(self.media_profiles)
         open_wins = get_open_windows()
-        is_vsc_open = any("visual studio code" in t.lower() for t, _ in open_wins)
-        is_chrome_open = any("google chrome" in t.lower() and not ("picture in picture" in t.lower() or "pip" in t.lower()) for t, h in open_wins if not detected_hwnd or h != detected_hwnd)
+
+        app_roles = self.layout_settings.get("app_roles", {
+            "primary": ["Visual Studio Code", "Google Chrome"],
+            "secondary": ["Google Chrome"]
+        })
+        primary_candidates = [a.lower() for a in app_roles.get("primary", ["Visual Studio Code"])]
+        secondary_candidates = [a.lower() for a in app_roles.get("secondary", ["Google Chrome"])]
+
+        primary_hwnd = None
+        secondary_hwnd = None
+
+        # Detect Primary
+        for cand in primary_candidates:
+            if primary_hwnd: break
+            for t, h in open_wins:
+                if detected_hwnd and h == detected_hwnd: continue
+                if cand in t.lower():
+                    primary_hwnd = h
+                    break
+        
+        # Detect Secondary
+        for cand in secondary_candidates:
+            if secondary_hwnd: break
+            for t, h in open_wins:
+                if detected_hwnd and h == detected_hwnd: continue
+                if primary_hwnd and h == primary_hwnd: continue
+                if cand in t.lower():
+                    secondary_hwnd = h
+                    break
+
+        is_primary_open = bool(primary_hwnd)
+        is_secondary_open = bool(secondary_hwnd)
 
         if detected_app:
             self.status_dot.setText("●")
             self.status_dot.setStyleSheet("color: #38bdf8; font-size: 14px;")
 
-            if (is_vsc_open and not is_chrome_open) or (is_chrome_open and not is_vsc_open):
-                active_app = "VS Code" if is_vsc_open else "Chrome"
+            if (is_primary_open and not is_secondary_open) or (is_secondary_open and not is_primary_open):
+                active_app = "Primary App" if is_primary_open else "Secondary App"
                 corner_name = self.corner_settings.get("corner", "Bottom-Right")
                 self.status_headline.setText(f"Fullscreen {active_app} + {detected_app} Popup ({ar})")
                 self.status_detail.setText(f"Media is floating at {corner_name} with {ar} ratio over fullscreen {active_app}.")
@@ -317,7 +351,7 @@ class MainWindow(QMainWindow):
             self.status_dot.setText("●")
             self.status_dot.setStyleSheet("color: #30d158; font-size: 14px;")
             self.status_headline.setText("No Media Active — 50 / 50 Split")
-            self.status_detail.setText("Chrome and VS Code divide your workspace evenly.")
+            self.status_detail.setText("Primary and Secondary apps divide your workspace evenly.")
 
     def render_profiles_list(self):
         while self.profiles_list_layout.count():
@@ -455,11 +489,11 @@ class MainWindow(QMainWindow):
             if "corner_settings" in config:
                 self.corner_settings.update(config["corner_settings"])
 
-        vsc_side = self.layout_settings.get("vscode_side", "Right")
+        vsc_side = self.layout_settings.get("primary_side") or self.layout_settings.get("vscode_side", "Right")
         self.btn_side_left.setChecked(vsc_side == "Left")
         self.btn_side_right.setChecked(vsc_side == "Right")
 
-        chr_sz = self.layout_settings.get("chrome_sizing", "432px")
+        chr_sz = self.layout_settings.get("secondary_sizing") or self.layout_settings.get("chrome_sizing", "432px")
         self.btn_chr_equal.setChecked(chr_sz == "Equal Size")
         self.btn_chr_432.setChecked(chr_sz == "432px")
         self.btn_chr_590.setChecked(chr_sz == "590px")

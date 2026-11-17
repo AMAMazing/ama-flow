@@ -13,6 +13,29 @@ class RECT(ctypes.Structure):
         ('bottom', wintypes.LONG)
     ]
 
+class POINT(ctypes.Structure):
+    _fields_ = [
+        ('x', wintypes.LONG),
+        ('y', wintypes.LONG)
+    ]
+
+class MONITORINFOEXW(ctypes.Structure):
+    _fields_ = [
+        ('cbSize', wintypes.DWORD),
+        ('rcMonitor', RECT),
+        ('rcWork', RECT),
+        ('dwFlags', wintypes.DWORD),
+        ('szDevice', wintypes.WCHAR * 32)
+    ]
+
+MONITORENUMPROC = ctypes.WINFUNCTYPE(
+    ctypes.c_bool,
+    wintypes.HANDLE,
+    wintypes.HANDLE,
+    ctypes.POINTER(RECT),
+    wintypes.LPARAM
+)
+
 WINEVENTPROC = ctypes.WINFUNCTYPE(
     None,
     wintypes.HANDLE,
@@ -24,7 +47,134 @@ WINEVENTPROC = ctypes.WINFUNCTYPE(
     wintypes.DWORD
 )
 
+def enable_dpi_awareness():
+    """
+    Enables Per-Monitor DPI Awareness v2 so Win32 coordinate APIs and Qt coordinate
+    systems operate in un-stretched physical pixels on all display scales (100%, 125%, 150%, 200%).
+    """
+    try:
+        # DPI_AWARENESS_CONTEXT_PER_MONITOR_AWARE_V2 = -4
+        ctypes.windll.user32.SetProcessDpiAwarenessContext(ctypes.c_void_p(-4))
+        return True
+    except Exception:
+        pass
+
+    try:
+        # PROCESS_PER_MONITOR_DPI_AWARE = 2
+        ctypes.windll.shcore.SetProcessDpiAwareness(2)
+        return True
+    except Exception:
+        pass
+
+    try:
+        ctypes.windll.user32.SetProcessDPIAware()
+        return True
+    except Exception:
+        pass
+    return False
+
+# Automatically invoke upon module import to protect all downstream coordinate queries
+enable_dpi_awareness()
+
+def _extract_monitor_info(hmonitor):
+    if not hmonitor:
+        return None
+    try:
+        mi = MONITORINFOEXW()
+        mi.cbSize = ctypes.sizeof(MONITORINFOEXW)
+        if ctypes.windll.user32.GetMonitorInfoW(hmonitor, ctypes.byref(mi)):
+            ml, mt, mr, mb = mi.rcMonitor.left, mi.rcMonitor.top, mi.rcMonitor.right, mi.rcMonitor.bottom
+            wl, wt, wr, wb = mi.rcWork.left, mi.rcWork.top, mi.rcWork.right, mi.rcWork.bottom
+            dpi_x = ctypes.c_uint(96)
+            dpi_y = ctypes.c_uint(96)
+            try:
+                # MDT_EFFECTIVE_DPI = 0
+                ctypes.windll.shcore.GetDpiForMonitor(hmonitor, 0, ctypes.byref(dpi_x), ctypes.byref(dpi_y))
+            except Exception:
+                pass
+            dpi = dpi_x.value if dpi_x.value > 0 else 96
+            return {
+                "device": mi.szDevice,
+                "monitor": (ml, mt, mr - ml, mb - mt),
+                "work": (wl, wt, wr - wl, wb - wt),
+                "dpi": dpi,
+                "scale": dpi / 96.0,
+            }
+    except Exception:
+        pass
+    return None
+
+def get_primary_monitor_info():
+    try:
+        # MONITOR_DEFAULTTOPRIMARY = 1
+        hmon = ctypes.windll.user32.MonitorFromPoint(POINT(0, 0), 1)
+        info = _extract_monitor_info(hmon)
+        if info:
+            return info
+    except Exception:
+        pass
+    sw, sh = get_screen_resolution()
+    return {
+        "device": "",
+        "monitor": (0, 0, sw, sh),
+        "work": (0, 0, sw, sh),
+        "dpi": 96,
+        "scale": 1.0,
+    }
+
+def get_monitor_info_from_point(x, y):
+    try:
+        # MONITOR_DEFAULTTONEAREST = 2
+        hmon = ctypes.windll.user32.MonitorFromPoint(POINT(int(x), int(y)), 2)
+        info = _extract_monitor_info(hmon)
+        if info:
+            return info
+    except Exception:
+        pass
+    return get_primary_monitor_info()
+
+def get_monitor_info_from_hwnd(hwnd):
+    if hwnd:
+        try:
+            # MONITOR_DEFAULTTONEAREST = 2
+            hmon = ctypes.windll.user32.MonitorFromWindow(int(hwnd), 2)
+            info = _extract_monitor_info(hmon)
+            if info:
+                return info
+        except Exception:
+            pass
+    return get_primary_monitor_info()
+
+def get_monitor_info_by_name(device_name):
+    if device_name:
+        matched = []
+        def _cb(hmon, hdc, lprect, lparam):
+            info = _extract_monitor_info(hmon)
+            if info and info["device"] == device_name:
+                matched.append(info)
+                return False
+            return True
+        try:
+            ctypes.windll.user32.EnumDisplayMonitors(None, None, MONITORENUMPROC(_cb), 0)
+            if matched:
+                return matched[0]
+        except Exception:
+            pass
+    return get_primary_monitor_info()
+
+def get_cursor_pos():
+    pt = POINT()
+    try:
+        if ctypes.windll.user32.GetCursorPos(ctypes.byref(pt)):
+            return pt.x, pt.y
+    except Exception:
+        pass
+    return 0, 0
+
 def get_screen_resolution():
+    """
+    Returns (width, height) of the primary display in physical pixels.
+    """
     try:
         user32 = ctypes.windll.user32
         # SM_CXSCREEN = 0, SM_CYSCREEN = 1
@@ -36,9 +186,39 @@ def get_screen_resolution():
         pass
     return 1920, 1080
 
+def get_screen_work_area():
+    """
+    Returns (x, y, width, height) of the primary monitor's physical work area,
+    which excludes the Windows taskbar and docked appbars regardless of
+    where the taskbar is positioned (bottom, top, left, right) or DPI scale.
+    """
+    try:
+        hmon = ctypes.windll.user32.MonitorFromPoint(POINT(0, 0), 1)
+        info = _extract_monitor_info(hmon)
+        if info:
+            wx, wy, ww, wh = info["work"]
+            if ww > 0 and wh > 0:
+                return wx, wy, ww, wh
+    except Exception:
+        pass
+    try:
+        rect = RECT()
+        # SPI_GETWORKAREA = 0x0030
+        if ctypes.windll.user32.SystemParametersInfoW(0x0030, 0, ctypes.byref(rect), 0):
+            x = rect.left
+            y = rect.top
+            w = rect.right - rect.left
+            h = rect.bottom - rect.top
+            if w > 0 and h > 0:
+                return x, y, w, h
+    except Exception:
+        pass
+    sw, sh = get_screen_resolution()
+    return 0, 0, sw, sh
+
 def get_window_margins(hwnd):
     """
-    Returns (pad_left, pad_top, pad_right, pad_bottom) by comparing
+    Returns (pad_left, pad_top, pad_right, pad_bottom) in physical pixels by comparing
     GetWindowRect (which includes invisible resize borders) with
     DwmGetWindowAttribute (actual visual frame).
     """
@@ -47,11 +227,13 @@ def get_window_margins(hwnd):
         fr = RECT()
         # 9 is DWMWA_EXTENDED_FRAME_BOUNDS
         if ctypes.windll.dwmapi.DwmGetWindowAttribute(hwnd, 9, ctypes.byref(fr), ctypes.sizeof(fr)) == 0:
-            pad_left = fr.left - wr[0]
-            pad_top = fr.top - wr[1]
-            pad_right = wr[2] - fr.right
-            pad_bottom = wr[3] - fr.bottom
-            return pad_left, pad_top, pad_right, pad_bottom
+            if wr[2] > wr[0] and wr[3] > wr[1] and fr.right > fr.left and fr.bottom > fr.top:
+                pad_left = fr.left - wr[0]
+                pad_top = fr.top - wr[1]
+                pad_right = wr[2] - fr.right
+                pad_bottom = wr[3] - fr.bottom
+                if all(-32 <= p <= 64 for p in (pad_left, pad_top, pad_right, pad_bottom)):
+                    return pad_left, pad_top, pad_right, pad_bottom
     except Exception:
         pass
     return 0, 0, 0, 0
@@ -63,7 +245,7 @@ def is_alt_tab_window(hwnd):
     if not title:
         return False
 
-    if "windowzones" in title.lower() or "appzones" in title.lower():
+    if title.lower() in ("windowzones", "appzones"):
         return False
 
     try:
@@ -169,15 +351,18 @@ def calculate_window_aspect_ratio(hwnd):
     except Exception:
         return None, 0, 0
 
-def find_window_by_title(title_substring):
+def find_window_by_title(title_substring, exact=False):
     if not title_substring:
         return None
+    target = title_substring.strip().lower()
     hwnds = []
     def callback(hwnd, collector):
         if win32gui.IsWindowVisible(hwnd):
-            text = win32gui.GetWindowText(hwnd)
-            if text and title_substring.lower() in text.lower():
-                collector.append(hwnd)
+            text = win32gui.GetWindowText(hwnd).strip()
+            if text:
+                text_lower = text.lower()
+                if (exact and text_lower == target) or (not exact and target in text_lower):
+                    collector.append(hwnd)
         return True
     try:
         win32gui.EnumWindows(callback, hwnds)
@@ -193,17 +378,40 @@ def position_window(hwnd, rect):
         elif placement[1] == win32con.SW_SHOWMAXIMIZED:
             win32gui.ShowWindow(hwnd, win32con.SW_NORMAL)
 
+        tx = int(round(rect["x"]))
+        ty = int(round(rect["y"]))
+        tw = int(round(rect["width"]))
+        th = int(round(rect["height"]))
+
         pad_left, pad_top, pad_right, pad_bottom = get_window_margins(hwnd)
 
-        x = int(rect["x"]) - pad_left
-        y = int(rect["y"]) - pad_top
-        w = int(rect["width"]) + pad_left + pad_right
-        h = int(rect["height"]) + pad_top + pad_bottom
+        x = tx - pad_left
+        y = ty - pad_top
+        w = tw + pad_left + pad_right
+        h = th + pad_top + pad_bottom
 
         win32gui.SetWindowPos(
             hwnd, win32con.HWND_TOP,
             x, y, w, h,
             0
         )
+
+        # Second pass: verify actual DWM visual frame after any WM_DPICHANGED or unmaximize reflow
+        fr = RECT()
+        if ctypes.windll.dwmapi.DwmGetWindowAttribute(hwnd, 9, ctypes.byref(fr), ctypes.sizeof(fr)) == 0:
+            actual = (fr.left, fr.top, fr.right - fr.left, fr.bottom - fr.top)
+            if actual != (tx, ty, tw, th):
+                pl2, pt2, pr2, pb2 = get_window_margins(hwnd)
+                nx = tx - pl2
+                ny = ty - pt2
+                nw = tw + pl2 + pr2
+                nh = th + pt2 + pb2
+                wr2 = win32gui.GetWindowRect(hwnd)
+                if (nx, ny, nw, nh) != (wr2[0], wr2[1], wr2[2] - wr2[0], wr2[3] - wr2[1]):
+                    win32gui.SetWindowPos(
+                        hwnd, 0,
+                        nx, ny, nw, nh,
+                        win32con.SWP_NOZORDER | win32con.SWP_NOACTIVATE
+                    )
     except Exception as e:
         print(f"Failed to position window {hwnd}: {e}", flush=True)

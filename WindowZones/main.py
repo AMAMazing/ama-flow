@@ -5,6 +5,9 @@ WINDOWZONES_DIR = os.path.dirname(os.path.abspath(__file__))
 if WINDOWZONES_DIR not in sys.path:
     sys.path.insert(0, WINDOWZONES_DIR)
 
+from core.win_utils import enable_dpi_awareness
+enable_dpi_awareness()
+
 from daemon.service import run_daemon, apply_layout_statically
 
 def main():

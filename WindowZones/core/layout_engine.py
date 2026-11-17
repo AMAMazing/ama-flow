@@ -17,12 +17,19 @@ def parse_aspect_ratio(val):
         return 16.0 / 9.0
 
 
-def calculate_fullscreen_corner_rects(corner_settings, media_profiles, screen_w, screen_h, detected_ar=None, fs_app_override=None, media_title_override=None):
+def calculate_fullscreen_corner_rects(corner_settings, media_profiles, screen_w, screen_h, detected_ar=None, fs_app_override=None, media_title_override=None, origin_x=0, origin_y=0):
     fs_title = fs_app_override or corner_settings.get("fullscreen_app", "").strip() or "Visual Studio Code"
     media_title = media_title_override or corner_settings.get("media_app", "").strip() or "Picture in picture"
     corner = corner_settings.get("corner", "Bottom-Right")
-    max_w = int(corner_settings.get("max_width", 640))
-    max_h = int(corner_settings.get("max_height", 360))
+    raw_max_w = int(corner_settings.get("max_width", 640))
+    raw_max_h = int(corner_settings.get("max_height", 360))
+
+    # Resolution scaling for corner popup relative to standard 1080p reference
+    scale_factor = min(screen_w / 1920.0, screen_h / 1080.0) if (screen_w > 0 and screen_h > 0) else 1.0
+    scale_factor = max(0.5, scale_factor)
+
+    max_w = int(round(raw_max_w * scale_factor))
+    max_h = int(round(raw_max_h * scale_factor))
 
     if detected_ar:
         ar_str = str(detected_ar)
@@ -47,17 +54,17 @@ def calculate_fullscreen_corner_rects(corner_settings, media_profiles, screen_w,
     mh = max(100, min(mh, screen_h))
 
     if corner == "Bottom-Right":
-        mx = screen_w - mw
-        my = screen_h - mh
+        mx = origin_x + screen_w - mw
+        my = origin_y + screen_h - mh
     elif corner == "Bottom-Left":
-        mx = 0
-        my = screen_h - mh
+        mx = origin_x
+        my = origin_y + screen_h - mh
     elif corner == "Top-Right":
-        mx = screen_w - mw
-        my = 0
+        mx = origin_x + screen_w - mw
+        my = origin_y
     else:  # Top-Left
-        mx = 0
-        my = 0
+        mx = origin_x
+        my = origin_y
 
     return [
         {
@@ -67,8 +74,8 @@ def calculate_fullscreen_corner_rects(corner_settings, media_profiles, screen_w,
             "stat": "Fullscreen",
             "val": "",
             "rect": {
-                "x": 0,
-                "y": 0,
+                "x": origin_x,
+                "y": origin_y,
                 "width": screen_w,
                 "height": screen_h
             }
@@ -89,17 +96,23 @@ def calculate_fullscreen_corner_rects(corner_settings, media_profiles, screen_w,
     ]
 
 
-def calculate_rects(zones, screen_w, screen_h, secondary_val="equal"):
-    rem_x, rem_y, rem_w, rem_h = 0, 0, screen_w, screen_h
+def calculate_rects(zones, screen_w, screen_h, secondary_val="equal", origin_x=0, origin_y=0):
+    rem_x, rem_y, rem_w, rem_h = origin_x, origin_y, screen_w, screen_h
+
+    # Compute vertical scaling factor for hardcoded pixel heights calibrated to 1080p
+    v_scale = (screen_h / 1080.0) if screen_h > 0 else 1.0
+    min_h = max(80, int(round(100 * v_scale)))
+    has_fill_zone = any(z.get("pos") == "Fill Space" or z.get("stat") == "Fill (Any)" for z in zones)
 
     def get_val(z, max_val, is_width=True):
         stat = z.get("stat", "")
         val = z.get("val", "0")
         try:
             if stat == "Width (px)" and is_width:
-                return int(val)
+                h_scale = (screen_w / 1920.0) if screen_w > 0 else 1.0
+                return int(round(int(val) * h_scale))
             if stat in ["Height (px)", "Min Height (px)"] and not is_width:
-                return int(val)
+                return int(round(int(val) * v_scale))
             if stat == "Width (%)" and is_width:
                 return int(max_val * float(val) / 100.0)
             if stat in ["Height (%)", "Min Height (%)"] and not is_width:
@@ -154,6 +167,7 @@ def calculate_rects(zones, screen_w, screen_h, secondary_val="equal"):
             return 0
 
         top_h, bot_h, col_w = 0, 0, 0
+        max_col_w = int(total_w * 0.72) if (has_fill_zone and total_w >= 400) else total_w
 
         if top_zone and bot_zone:
             top_stat = top_zone.get("stat", "")
@@ -172,9 +186,18 @@ def calculate_rects(zones, screen_w, screen_h, secondary_val="equal"):
                         top_h = int(total_h * pct / 100.0)
                     else:
                         match = re.search(r"(\d+)", raw)
-                        top_h = int(match.group(1)) if match else (get_val(top_zone, total_h, False) or (total_h // 2))
+                        if match:
+                            base_px = int(match.group(1))
+                            top_h = int(round(base_px * v_scale))
+                        else:
+                            top_h = get_val(top_zone, total_h, False) or (total_h // 2)
+                    top_h = max(min_h, min(top_h, total_h - min_h))
                     bot_h = total_h - top_h
-                col_w = int(bot_h * ar)
+                col_w = int(round(bot_h * ar))
+                if col_w > max_col_w and ar > 0:
+                    col_w = max_col_w
+                    bot_h = max(min_h, min(total_h - min_h, int(round(col_w / ar))))
+                    top_h = total_h - bot_h
             elif "Height" in bot_stat and "Aspect Ratio" in top_stat:
                 ar = parse_aspect_ratio(top_zone.get("val", ""))
                 if secondary_val == "equal":
@@ -188,9 +211,18 @@ def calculate_rects(zones, screen_w, screen_h, secondary_val="equal"):
                         bot_h = int(total_h * pct / 100.0)
                     else:
                         match = re.search(r"(\d+)", raw)
-                        bot_h = int(match.group(1)) if match else (get_val(bot_zone, total_h, False) or (total_h // 2))
+                        if match:
+                            base_px = int(match.group(1))
+                            bot_h = int(round(base_px * v_scale))
+                        else:
+                            bot_h = get_val(bot_zone, total_h, False) or (total_h // 2)
+                    bot_h = max(min_h, min(bot_h, total_h - min_h))
                     top_h = total_h - bot_h
-                col_w = int(top_h * ar)
+                col_w = int(round(top_h * ar))
+                if col_w > max_col_w and ar > 0:
+                    col_w = max_col_w
+                    top_h = max(min_h, min(total_h - min_h, int(round(col_w / ar))))
+                    bot_h = total_h - top_h
             elif "Height" in top_stat and "Height" in bot_stat:
                 top_h = get_val(top_zone, total_h, False)
                 bot_h = get_val(bot_zone, total_h, False)
@@ -263,25 +295,26 @@ def calculate_rects(zones, screen_w, screen_h, secondary_val="equal"):
     return zones
 
 
-def calculate_smart_layout(config_or_data, screen_w, screen_h, open_windows=None):
+def calculate_smart_layout(config_or_data, screen_w, screen_h, open_windows=None, origin_x=0, origin_y=0):
     """
     Computes active zones based on currently open windows utilizing Semantic App Roles (Primary/Secondary).
       - Primary App: Takes the large/fill space. (Defaults to VS Code or 1st Chrome window)
       - Secondary App: Takes the shared space alongside Media. (Defaults to 2nd Chrome window)
+    Supports arbitrary display resolutions, DPI scaling, and work area origin offsets (taskbars).
     """
     layout_settings = config_or_data.get("layout_settings", {})
     corner_settings = config_or_data.get("corner_settings", {})
-    
+
     # Legacy fallbacks
     chrome_sizes = config_or_data.get("chrome_sizes", layout_settings.get("chrome_sizes", {}))
     media_profiles = config_or_data.get("media_profiles", layout_settings.get("media_profiles", {}))
-    
+
     # Semantic Roles Config
     app_roles = layout_settings.get("app_roles", {
         "primary": ["Visual Studio Code", "Google Chrome"],
         "secondary": ["Google Chrome"]
     })
-    
+
     primary_candidates = [a.lower() for a in app_roles.get("primary", ["Visual Studio Code"])]
     secondary_candidates = [a.lower() for a in app_roles.get("secondary", ["Google Chrome"])]
 
@@ -319,7 +352,7 @@ def calculate_smart_layout(config_or_data, screen_w, screen_h, open_windows=None
     for cand in primary_candidates:
         if primary_hwnd: break
         for win_title, hwnd in open_windows:
-            if detected_hwnd and hwnd == detected_hwnd: continue # Skip media
+            if detected_hwnd and hwnd == detected_hwnd: continue  # Skip media
             if cand in win_title.lower():
                 primary_hwnd = hwnd
                 primary_title = win_title
@@ -329,8 +362,8 @@ def calculate_smart_layout(config_or_data, screen_w, screen_h, open_windows=None
     for cand in secondary_candidates:
         if secondary_hwnd: break
         for win_title, hwnd in open_windows:
-            if detected_hwnd and hwnd == detected_hwnd: continue # Skip media
-            if primary_hwnd and hwnd == primary_hwnd: continue # Skip primary window instance
+            if detected_hwnd and hwnd == detected_hwnd: continue  # Skip media
+            if primary_hwnd and hwnd == primary_hwnd: continue  # Skip primary window instance
             if cand in win_title.lower():
                 secondary_hwnd = hwnd
                 secondary_title = win_title
@@ -348,7 +381,7 @@ def calculate_smart_layout(config_or_data, screen_w, screen_h, open_windows=None
     # Check if manual mode override
     mode = config_or_data.get("mode", "3_window")
     if mode == "fullscreen_corner" and not is_auto:
-        return calculate_fullscreen_corner_rects(corner_settings, media_profiles, screen_w, screen_h)
+        return calculate_fullscreen_corner_rects(corner_settings, media_profiles, screen_w, screen_h, origin_x=origin_x, origin_y=origin_y)
 
     # =========================================================================
     # SCENARIO 1: MEDIA IS OPEN
@@ -367,7 +400,9 @@ def calculate_smart_layout(config_or_data, screen_w, screen_h, open_windows=None
                 screen_h,
                 detected_ar=matched_ar,
                 fs_app_override=fs_app_name,
-                media_title_override=media_win_title
+                media_title_override=media_win_title,
+                origin_x=origin_x,
+                origin_y=origin_y
             )
 
         # Case B: BOTH PRIMARY AND SECONDARY ARE OPEN (3 windows) OR PREVIEW MODE
@@ -402,7 +437,7 @@ def calculate_smart_layout(config_or_data, screen_w, screen_h, open_windows=None
                 "val": ""
             }
         ]
-        return calculate_rects(zones, screen_w, screen_h, secondary_val=secondary_val)
+        return calculate_rects(zones, screen_w, screen_h, secondary_val=secondary_val, origin_x=origin_x, origin_y=origin_y)
 
     # =========================================================================
     # SCENARIO 2: NO MEDIA OPEN -> 50/50 SPLIT OR FULLSCREEN
@@ -411,13 +446,13 @@ def calculate_smart_layout(config_or_data, screen_w, screen_h, open_windows=None
     rem_w = screen_w - half_w
 
     if primary_side == "Right":
-        secondary_rect = {"x": 0, "y": 0, "width": half_w, "height": screen_h}
-        primary_rect = {"x": half_w, "y": 0, "width": rem_w, "height": screen_h}
+        secondary_rect = {"x": origin_x, "y": origin_y, "width": half_w, "height": screen_h}
+        primary_rect = {"x": origin_x + half_w, "y": origin_y, "width": rem_w, "height": screen_h}
         secondary_pos = "Left"
         primary_pos = "Right"
     else:
-        primary_rect = {"x": 0, "y": 0, "width": half_w, "height": screen_h}
-        secondary_rect = {"x": half_w, "y": 0, "width": rem_w, "height": screen_h}
+        primary_rect = {"x": origin_x, "y": origin_y, "width": half_w, "height": screen_h}
+        secondary_rect = {"x": origin_x + half_w, "y": origin_y, "width": rem_w, "height": screen_h}
         primary_pos = "Left"
         secondary_pos = "Right"
 

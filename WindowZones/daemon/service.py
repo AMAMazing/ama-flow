@@ -4,8 +4,8 @@ import signal
 import ctypes
 import subprocess
 from PyQt6.QtWidgets import QApplication, QSystemTrayIcon, QMenu, QStyle
-from PyQt6.QtCore import QObject, QTimer, QRect
-from PyQt6.QtGui import QCursor, QIcon, QAction
+from PyQt6.QtCore import Qt, QObject, QTimer
+from PyQt6.QtGui import QIcon, QAction
 
 try:
     from ..core.config import (
@@ -20,10 +20,16 @@ try:
     )
     from ..core.win_utils import (
         WINEVENTPROC,
+        enable_dpi_awareness,
         find_window_by_title,
         position_window,
         get_open_windows,
-        get_screen_resolution
+        get_cursor_pos,
+        get_primary_monitor_info,
+        get_monitor_info_from_point,
+        get_monitor_info_from_hwnd,
+        get_screen_resolution,
+        get_screen_work_area
     )
     from ..core.layout_engine import (
         calculate_smart_layout,
@@ -43,10 +49,16 @@ except (ImportError, ValueError):
     )
     from core.win_utils import (
         WINEVENTPROC,
+        enable_dpi_awareness,
         find_window_by_title,
         position_window,
         get_open_windows,
-        get_screen_resolution
+        get_cursor_pos,
+        get_primary_monitor_info,
+        get_monitor_info_from_point,
+        get_monitor_info_from_hwnd,
+        get_screen_resolution,
+        get_screen_work_area
     )
     from core.layout_engine import (
         calculate_smart_layout,
@@ -57,6 +69,10 @@ except (ImportError, ValueError):
 from .overlay import OverlayWidget
 from .hotkey import HotkeyFilter
 
+# Ensure process DPI awareness is active
+enable_dpi_awareness()
+
+
 def get_pythonw_executable():
     exec_dir = os.path.dirname(sys.executable)
     pyw = os.path.join(exec_dir, "pythonw.exe")
@@ -64,8 +80,9 @@ def get_pythonw_executable():
         return pyw
     return sys.executable
 
+
 def launch_gui():
-    existing = find_window_by_title("WindowZones")
+    existing = find_window_by_title("WindowZones", exact=True)
     if existing:
         user32 = ctypes.windll.user32
         user32.ShowWindow(existing, 9)
@@ -78,11 +95,13 @@ def launch_gui():
     try:
         subprocess.Popen(
             [py_exec, GUI_SCRIPT],
+            cwd=APP_DIR,
             creationflags=DETACHED_PROCESS | CREATE_NO_WINDOW,
             close_fds=True
         )
     except Exception as e:
         print(f"Failed to launch GUI: {e}", flush=True)
+
 
 def get_startup_shortcut_path():
     appdata = os.environ.get("APPDATA")
@@ -90,9 +109,11 @@ def get_startup_shortcut_path():
         return os.path.join(appdata, "Microsoft", "Windows", "Start Menu", "Programs", "Startup", "WindowZones.lnk")
     return None
 
+
 def is_startup_enabled():
     path = get_startup_shortcut_path()
     return path is not None and os.path.exists(path)
+
 
 def set_startup_enabled(enable: bool):
     path = get_startup_shortcut_path()
@@ -133,28 +154,43 @@ def set_startup_enabled(enable: bool):
             print(f"Failed to disable startup: {e}", flush=True)
             return False
 
-def get_active_zones_for_current_state(config=None):
+
+def get_active_monitor_info():
+    try:
+        fg_hwnd = ctypes.windll.user32.GetForegroundWindow()
+        if fg_hwnd:
+            return get_monitor_info_from_hwnd(fg_hwnd)
+    except Exception:
+        pass
+    return get_primary_monitor_info()
+
+
+def get_active_zones_for_current_state(config=None, monitor_info=None):
     if config is None:
         config = load_config(CONFIG_PATH)
 
     mode = config.get("mode", "3_window")
-    primary_screen = QApplication.primaryScreen()
+    if monitor_info is None:
+        monitor_info = get_active_monitor_info()
 
-    if primary_screen:
-        screen_geo = primary_screen.geometry()
-        screen_w, screen_h = screen_geo.width(), screen_geo.height()
-    else:
-        screen_w, screen_h = get_screen_resolution()
+    origin_x, origin_y, screen_w, screen_h = monitor_info["work"]
 
     if mode == "fullscreen_corner":
         corner_settings = config.get("corner_settings", {})
         media_profiles = config.get("layout_settings", {}).get("media_profiles", {})
-        return calculate_fullscreen_corner_rects(corner_settings, media_profiles, screen_w, screen_h)
+        return calculate_fullscreen_corner_rects(
+            corner_settings, media_profiles, screen_w, screen_h,
+            origin_x=origin_x, origin_y=origin_y
+        )
 
     # 3-window mode (smart auto-detect media vs 50/50 split)
     open_wins = get_open_windows()
-    zones = calculate_smart_layout(config, screen_w, screen_h, open_windows=open_wins)
+    zones = calculate_smart_layout(
+        config, screen_w, screen_h, open_windows=open_wins,
+        origin_x=origin_x, origin_y=origin_y
+    )
     return zones
+
 
 def apply_layout_statically():
     config = load_config(CONFIG_PATH)
@@ -180,11 +216,11 @@ def apply_layout_statically():
             hwnd = detected_hwnd
         else:
             hwnd = find_window_by_title(title)
-            
+
             # General fallback to prevent HWND collisions (same window assigned to multiple zones)
             if hwnd in used_hwnds:
                 hwnd = None
-                
+
             if not hwnd:
                 for w_title, w_hwnd in get_open_windows():
                     if w_hwnd not in used_hwnds and title.lower() in w_title.lower():
@@ -198,6 +234,7 @@ def apply_layout_statically():
         else:
             print(f"Skipping '{title}' (window not currently open)", flush=True)
 
+
 class WindowZonesDaemon(QObject):
     def __init__(self):
         super().__init__()
@@ -206,6 +243,7 @@ class WindowZonesDaemon(QObject):
         self.is_moving = False
         self.moving_hwnd = None
         self.snap_modifier_vk = 0x11
+        self.active_monitor_device = None
 
         self.timer = QTimer(self)
         self.timer.timeout.connect(self.on_tick)
@@ -231,11 +269,13 @@ class WindowZonesDaemon(QObject):
             root_hwnd = ctypes.windll.user32.GetAncestor(hwnd, 2)
             self.is_moving = True
             self.moving_hwnd = root_hwnd
+            self.active_monitor_device = None
             self.refresh_modifier_vk()
             self.timer.start(16)
         elif event == 0x000B:
             self.is_moving = False
             self.timer.stop()
+            self.active_monitor_device = None
             if self.overlay.isVisible():
                 self.overlay.hide()
                 if self.overlay.hovered_zone_idx != -1:
@@ -247,20 +287,28 @@ class WindowZonesDaemon(QObject):
         modifier_pressed = ctypes.windll.user32.GetAsyncKeyState(self.snap_modifier_vk) & 0x8000
 
         if modifier_pressed:
-            if not self.overlay.isVisible():
-                self.overlay.load_zones()
+            cx, cy = get_cursor_pos()
+            mon_info = get_monitor_info_from_point(cx, cy)
+            mon_dev = mon_info.get("device")
+
+            if not self.overlay.isVisible() or mon_dev != self.active_monitor_device:
+                self.active_monitor_device = mon_dev
+                self.overlay.hovered_zone_idx = -1
+                self.overlay.load_zones(monitor_info=mon_info)
                 self.overlay.show()
 
-            pos = QCursor.pos()
             hovered = -1
             matching = []
             for i, z in enumerate(self.overlay.zones):
                 rect = z.get("rect")
                 if not rect:
                     continue
-                zr = QRect(int(rect["x"]), int(rect["y"]), int(rect["width"]), int(rect["height"]))
-                if zr.contains(pos):
-                    area = int(rect["width"]) * int(rect["height"])
+                rx = int(rect["x"])
+                ry = int(rect["y"])
+                rw = int(rect["width"])
+                rh = int(rect["height"])
+                if rx <= cx < rx + rw and ry <= cy < ry + rh:
+                    area = rw * rh
                     matching.append((area, -i, i))
 
             if matching:
@@ -274,6 +322,8 @@ class WindowZonesDaemon(QObject):
             if self.overlay.isVisible():
                 self.overlay.hide()
                 self.overlay.hovered_zone_idx = -1
+                self.active_monitor_device = None
+
 
 def run_daemon():
     mutex = ctypes.windll.kernel32.CreateMutexW(None, False, "WindowZonesDaemonMutex")
@@ -284,6 +334,7 @@ def run_daemon():
         apply_layout_statically()
         sys.exit(0)
 
+    QApplication.setHighDpiScaleFactorRoundingPolicy(Qt.HighDpiScaleFactorRoundingPolicy.PassThrough)
     app = QApplication(sys.argv)
     app.setQuitOnLastWindowClosed(False)
     signal.signal(signal.SIGINT, signal.SIG_DFL)
@@ -340,9 +391,11 @@ def run_daemon():
     action_startup = QAction("Start with Windows", menu)
     action_startup.setCheckable(True)
     action_startup.setChecked(is_startup_enabled())
+
     def on_startup_toggle(checked):
         set_startup_enabled(checked)
         action_startup.setChecked(is_startup_enabled())
+
     action_startup.toggled.connect(on_startup_toggle)
     menu.addAction(action_startup)
 

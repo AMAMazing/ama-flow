@@ -2,10 +2,11 @@ from PyQt6.QtWidgets import QWidget
 from PyQt6.QtCore import Qt, QRect
 from PyQt6.QtGui import QPainter, QColor, QPen, QFont
 
+
 class FullscreenPreviewOverlay(QWidget):
     """
     1:1 Fullscreen live preview overlay mirroring the FancyZones Ctrl+drag look,
-    enhanced to clearly display each zone's live resolution.
+    enhanced to clearly display each zone's live physical resolution.
     """
     def __init__(self):
         super().__init__()
@@ -18,9 +19,19 @@ class FullscreenPreviewOverlay(QWidget):
         )
         self.setAttribute(Qt.WidgetAttribute.WA_TranslucentBackground)
         self.zones = []
+        self.monitor_rect_phys = None
 
-    def set_zones(self, zones, screen_geo=None):
+    def set_zones(self, zones, screen_geo=None, monitor_rect_phys=None):
         self.zones = zones
+        if monitor_rect_phys is not None:
+            self.monitor_rect_phys = monitor_rect_phys
+        elif screen_geo is not None and self.monitor_rect_phys is None:
+            self.monitor_rect_phys = (
+                screen_geo.x(),
+                screen_geo.y(),
+                screen_geo.width(),
+                screen_geo.height(),
+            )
         if screen_geo:
             self.setGeometry(screen_geo)
         self.update()
@@ -31,6 +42,14 @@ class FullscreenPreviewOverlay(QWidget):
 
         # Subtle dark dimming across the entire screen
         painter.fillRect(self.rect(), QColor(0, 0, 0, 115))
+
+        if self.monitor_rect_phys:
+            mx, my, mw, mh = self.monitor_rect_phys
+        else:
+            mx, my, mw, mh = 0, 0, self.width(), self.height()
+
+        sx = (self.width() / float(mw)) if mw > 0 else 1.0
+        sy = (self.height() / float(mh)) if mh > 0 else 1.0
 
         palette = [
             (QColor(0, 120, 212, 55), QColor(0, 120, 212, 220), "#0078d4"),
@@ -52,8 +71,16 @@ class FullscreenPreviewOverlay(QWidget):
             if rw <= 0 or rh <= 0:
                 continue
 
-            zr = QRect(rx, ry, rw, rh)
-            zr.adjust(6, 6, -6, -6)
+            lx = int(round((rx - mx) * sx))
+            ly = int(round((ry - my) * sy))
+            lw = int(round(rw * sx))
+            lh = int(round(rh * sy))
+            if lw <= 0 or lh <= 0:
+                continue
+
+            zr = QRect(lx, ly, lw, lh)
+            pad = min(6, max(0, min(lw, lh) // 4))
+            zr.adjust(pad, pad, -pad, -pad)
 
             fill_c, border_c, accent_hex = palette[i % len(palette)]
 
@@ -89,7 +116,7 @@ class FullscreenPreviewOverlay(QWidget):
             title_rect = QRect(zr.x() + 54, zr.y() + 14, max(50, zr.width() - 70), 32)
             painter.drawText(title_rect, Qt.AlignmentFlag.AlignVCenter | Qt.AlignmentFlag.AlignLeft, header_text)
 
-            # Prominent live Resolution Display in center
+            # Prominent live physical Resolution Display in center
             res_text = f"{rw} × {rh} px"
 
             center_box = QRect(zr.x() + 10, zr.y() + (zr.height() // 2) - 40, zr.width() - 20, 80)

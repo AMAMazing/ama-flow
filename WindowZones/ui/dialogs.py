@@ -77,10 +77,11 @@ class AppSelectDialog(QDialog):
 
 class SettingsDialog(QDialog):
     """
-    Modal dialog allowing users to configure their 3 global keybindings:
+    Modal dialog allowing users to configure their 4 global keybindings:
     1. Open Editor / GUI (Default: Ctrl+Win+Z)
     2. Snapping Drag Modifier (Default: Ctrl)
     3. Apply Current Layout (Default: Win+Shift+Z)
+    4. Open VS Code Hub (Default: Win+Shift+A)
     """
     def __init__(self, parent=None):
         super().__init__(parent)
@@ -88,7 +89,8 @@ class SettingsDialog(QDialog):
         self.setMinimumWidth(480)
 
         self.config_data = load_config(CONFIG_PATH)
-        self.keybindings = dict(self.config_data.get("keybindings", DEFAULT_KEYBINDINGS))
+        self.keybindings = dict(DEFAULT_KEYBINDINGS)
+        self.keybindings.update(self.config_data.get("keybindings", {}))
 
         self.init_ui()
 
@@ -103,7 +105,7 @@ class SettingsDialog(QDialog):
         lbl_title.setStyleSheet("font-size: 18px; font-weight: 700; color: #ffffff;")
         layout.addWidget(lbl_title)
 
-        lbl_desc = QLabel("Customize your 3 primary shortcuts. Changes will be saved to config.json.")
+        lbl_desc = QLabel("Customize your 4 primary shortcuts. Changes are saved to config.json and apply automatically.")
         lbl_desc.setObjectName("subtitle")
         lbl_desc.setStyleSheet("color: #8c8c9a; font-size: 12px; margin-bottom: 4px;")
         layout.addWidget(lbl_desc)
@@ -154,6 +156,18 @@ class SettingsDialog(QDialog):
         box_apply.addWidget(self.edit_apply)
         card_layout.addLayout(box_apply)
 
+        # Shortcut 4: Open VS Code Hub
+        box_hub = QVBoxLayout()
+        box_hub.setSpacing(4)
+        lbl_hub = QLabel("4. Open VS Code Hub Shortcut:")
+        lbl_hub.setObjectName("field_label")
+        self.edit_vscode_hub = QLineEdit()
+        self.edit_vscode_hub.setPlaceholderText("e.g. Win+Shift+A")
+        self.edit_vscode_hub.setText(self.keybindings.get("open_vscode_hub", DEFAULT_KEYBINDINGS["open_vscode_hub"]))
+        box_hub.addWidget(lbl_hub)
+        box_hub.addWidget(self.edit_vscode_hub)
+        card_layout.addLayout(box_hub)
+
         layout.addWidget(card)
 
         # Buttons footer
@@ -184,11 +198,13 @@ class SettingsDialog(QDialog):
         if idx >= 0:
             self.combo_snap.setCurrentIndex(idx)
         self.edit_apply.setText(DEFAULT_KEYBINDINGS["apply_layout"])
+        self.edit_vscode_hub.setText(DEFAULT_KEYBINDINGS["open_vscode_hub"])
 
     def save_settings(self):
         open_gui_val = self.edit_gui.text().strip()
         snap_mod_val = self.combo_snap.currentText().strip()
         apply_layout_val = self.edit_apply.text().strip()
+        vscode_hub_val = self.edit_vscode_hub.text().strip()
 
         # Validate Open GUI hotkey
         mod1, vk1 = parse_hotkey(open_gui_val)
@@ -210,10 +226,21 @@ class SettingsDialog(QDialog):
             )
             return
 
+        # Validate VS Code Hub hotkey
+        mod3, vk3 = parse_hotkey(vscode_hub_val)
+        if mod3 is None or vk3 is None:
+            QMessageBox.warning(
+                self,
+                "Invalid Shortcut",
+                f"The Open VS Code Hub shortcut '{vscode_hub_val}' is invalid.\nPlease use a combination like 'Win+Shift+A' or 'Ctrl+Win+V'."
+            )
+            return
+
         self.keybindings = {
             "open_gui": open_gui_val,
             "snap_modifier": snap_mod_val,
-            "apply_layout": apply_layout_val
+            "apply_layout": apply_layout_val,
+            "open_vscode_hub": vscode_hub_val,
         }
 
         self.config_data["keybindings"] = self.keybindings

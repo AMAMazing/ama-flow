@@ -6,6 +6,7 @@ import subprocess
 from PyQt6.QtWidgets import QApplication, QSystemTrayIcon, QMenu, QStyle
 from PyQt6.QtCore import Qt, QObject, QTimer
 from PyQt6.QtGui import QIcon, QAction
+from PyQt6.QtNetwork import QLocalServer, QLocalSocket
 
 try:
     from ..core.config import (
@@ -13,6 +14,7 @@ try:
         APP_DIR,
         GUI_SCRIPT,
         MAIN_SCRIPT,
+        DEFAULT_KEYBINDINGS,
         load_config,
         parse_hotkey,
         parse_modifier_vk,
@@ -24,6 +26,8 @@ try:
         find_window_by_title,
         position_window,
         get_open_windows,
+        get_open_vscode_windows,
+        is_vscode_window_hwnd,
         get_cursor_pos,
         get_primary_monitor_info,
         get_monitor_info_from_point,
@@ -36,12 +40,15 @@ try:
         calculate_fullscreen_corner_rects
     )
     from ..core.detector import detector
+    from ..core.vscode_hub_engine import get_hub_engine
+    from ..ui.vscode_hub import VSCodeHubWindow
 except (ImportError, ValueError):
     from core.config import (
         CONFIG_PATH,
         APP_DIR,
         GUI_SCRIPT,
         MAIN_SCRIPT,
+        DEFAULT_KEYBINDINGS,
         load_config,
         parse_hotkey,
         parse_modifier_vk,
@@ -53,6 +60,8 @@ except (ImportError, ValueError):
         find_window_by_title,
         position_window,
         get_open_windows,
+        get_open_vscode_windows,
+        is_vscode_window_hwnd,
         get_cursor_pos,
         get_primary_monitor_info,
         get_monitor_info_from_point,
@@ -65,12 +74,36 @@ except (ImportError, ValueError):
         calculate_fullscreen_corner_rects
     )
     from core.detector import detector
+    from core.vscode_hub_engine import get_hub_engine
+    from ui.vscode_hub import VSCodeHubWindow
 
 from .overlay import OverlayWidget
 from .hotkey import HotkeyFilter
+from .vscode_tabs import VSCodeTabsManager, get_tab_bar_physical_height
 
 # Ensure process DPI awareness is active
 enable_dpi_awareness()
+
+DAEMON_IPC_NAME = "WindowZonesDaemonIPC"
+
+
+def send_daemon_command(command: str) -> bool:
+    """
+    Sends a lightweight IPC command (e.g. OPEN_HUB, RELOAD_CONFIG, APPLY_LAYOUT)
+    to the active background WindowZones daemon if running.
+    """
+    try:
+        sock = QLocalSocket()
+        sock.connectToServer(DAEMON_IPC_NAME)
+        if not sock.waitForConnected(250):
+            return False
+        sock.write(command.encode("utf-8"))
+        sock.flush()
+        sock.waitForBytesWritten(250)
+        sock.disconnectFromServer()
+        return True
+    except Exception:
+        return False
 
 
 def get_pythonw_executable():
@@ -192,9 +225,33 @@ def get_active_zones_for_current_state(config=None, monitor_info=None):
     return zones
 
 
+def _adjust_rect_for_vscode_tabs(rect, monitor_info):
+    wx, wy, ww, wh = monitor_info["work"]
+    bar_h = get_tab_bar_physical_height(monitor_info.get("scale", 1.0))
+    needed_top = wy + bar_h
+    if rect["y"] < needed_top:
+        delta = needed_top - rect["y"]
+        return {
+            "x": rect["x"],
+            "y": needed_top,
+            "width": rect["width"],
+            "height": max(240, rect["height"] - delta),
+        }
+    return dict(rect)
+
+
 def apply_layout_statically():
     config = load_config(CONFIG_PATH)
-    zones = get_active_zones_for_current_state(config)
+    monitor_info = get_active_monitor_info()
+    zones = get_active_zones_for_current_state(config, monitor_info=monitor_info)
+
+    # Check whether VS Code tabs will be active so top space is reserved cleanly
+    tabs_mode = config.get("layout_settings", {}).get("vscode_tabs_mode", "Auto")
+    open_vscode = get_open_vscode_windows()
+    tabs_active = (
+        (tabs_mode == "Enabled" and len(open_vscode) >= 1)
+        or (tabs_mode == "Auto" and len(open_vscode) >= 2)
+    )
 
     # Check if a media window was detected to get its exact HWND
     media_profiles = config.get("layout_settings", {}).get("media_profiles", {})
@@ -229,8 +286,18 @@ def apply_layout_statically():
 
         if hwnd:
             used_hwnds.add(hwnd)
-            print(f"Positioning '{title}' ({role}) to {rect}", flush=True)
-            position_window(hwnd, rect)
+            target_rect = rect
+            if tabs_active and is_vscode_window_hwnd(hwnd):
+                target_rect = _adjust_rect_for_vscode_tabs(rect, monitor_info)
+                # Stack all other non-minimized VS Code windows neatly into the same tabbed zone
+                for vwin in open_vscode:
+                    vhwnd = vwin["hwnd"]
+                    if vhwnd != hwnd and vhwnd not in used_hwnds and not vwin["is_minimized"]:
+                        used_hwnds.add(vhwnd)
+                        position_window(vhwnd, target_rect, no_activate=True)
+
+            print(f"Positioning '{title}' ({role}) to {target_rect}", flush=True)
+            position_window(hwnd, target_rect)
         else:
             print(f"Skipping '{title}' (window not currently open)", flush=True)
 
@@ -336,32 +403,126 @@ def run_daemon():
 
     QApplication.setHighDpiScaleFactorRoundingPolicy(Qt.HighDpiScaleFactorRoundingPolicy.PassThrough)
     app = QApplication(sys.argv)
+    app.setStyle("Fusion")
     app.setQuitOnLastWindowClosed(False)
     signal.signal(signal.SIGINT, signal.SIG_DFL)
 
     apply_layout_statically()
 
+    # Shared VS Code Hub engine powering both the native Hub window and the VS Code Tab Bar '+' dropdown
+    hub_engine = get_hub_engine()
+    hub_engine.start_scan()
+    hub_window = VSCodeHubWindow(engine=hub_engine)
+
+    def open_vscode_hub():
+        hub_window.toggle_hub()
+
+    tabs_manager = VSCodeTabsManager(engine=hub_engine, on_open_hub=hub_window.show_hub)
+    daemon_obj = WindowZonesDaemon()
+
+    registered_hotkeys = {}
+
+    def register_all_hotkeys(cfg=None):
+        cfg = cfg or load_config(CONFIG_PATH)
+        kb = cfg.get("keybindings", {})
+        targets = {
+            1: kb.get("open_gui", DEFAULT_KEYBINDINGS["open_gui"]),
+            2: kb.get("apply_layout", DEFAULT_KEYBINDINGS["apply_layout"]),
+            3: kb.get("open_vscode_hub", DEFAULT_KEYBINDINGS["open_vscode_hub"]),
+        }
+        user32 = ctypes.windll.user32
+        for hk_id, hk_str in targets.items():
+            if registered_hotkeys.get(hk_id) == hk_str:
+                continue
+            if hk_id in registered_hotkeys:
+                try:
+                    user32.UnregisterHotKey(0, hk_id)
+                except Exception:
+                    pass
+            mod, vk = parse_hotkey(hk_str)
+            if mod is not None and vk is not None:
+                user32.RegisterHotKey(0, hk_id, mod, vk)
+                registered_hotkeys[hk_id] = hk_str
+        return targets
+
+    def unregister_all_hotkeys():
+        user32 = ctypes.windll.user32
+        for hk_id in list(registered_hotkeys.keys()):
+            try:
+                user32.UnregisterHotKey(0, hk_id)
+            except Exception:
+                pass
+        registered_hotkeys.clear()
+
     config = load_config(CONFIG_PATH)
     keybindings = config.get("keybindings", {})
-    open_gui_str = keybindings.get("open_gui", "Ctrl+Win+Z")
-    apply_layout_str = keybindings.get("apply_layout", "Win+Shift+Z")
-    snap_mod_str = keybindings.get("snap_modifier", "Ctrl")
+    open_gui_str = keybindings.get("open_gui", DEFAULT_KEYBINDINGS["open_gui"])
+    apply_layout_str = keybindings.get("apply_layout", DEFAULT_KEYBINDINGS["apply_layout"])
+    open_hub_str = keybindings.get("open_vscode_hub", DEFAULT_KEYBINDINGS["open_vscode_hub"])
+    snap_mod_str = keybindings.get("snap_modifier", DEFAULT_KEYBINDINGS["snap_modifier"])
 
     app._hotkey_filter = HotkeyFilter(
         on_open_gui=launch_gui,
-        on_apply_layout=apply_layout_statically
+        on_apply_layout=apply_layout_statically,
+        on_open_vscode_hub=open_vscode_hub,
     )
     app.installNativeEventFilter(app._hotkey_filter)
+    register_all_hotkeys(config)
 
-    mod1, vk1 = parse_hotkey(open_gui_str)
-    if mod1 is not None and vk1 is not None:
-        ctypes.windll.user32.RegisterHotKey(0, 1, mod1, vk1)
+    # Hot-reload config.json changes (hotkeys & VS Code tabs mode) without requiring daemon restart
+    last_cfg_mtime = [os.path.getmtime(CONFIG_PATH) if os.path.exists(CONFIG_PATH) else 0.0]
 
-    mod2, vk2 = parse_hotkey(apply_layout_str)
-    if mod2 is not None and vk2 is not None:
-        ctypes.windll.user32.RegisterHotKey(0, 2, mod2, vk2)
+    def reload_runtime_config(force=False):
+        try:
+            cur_mtime = os.path.getmtime(CONFIG_PATH) if os.path.exists(CONFIG_PATH) else 0.0
+            if not force and cur_mtime == last_cfg_mtime[0]:
+                return
+            last_cfg_mtime[0] = cur_mtime
+            fresh_cfg = load_config(CONFIG_PATH)
+            register_all_hotkeys(fresh_cfg)
+            daemon_obj.refresh_modifier_vk()
+            tabs_manager.reload_mode_from_config()
+            tabs_manager.refresh_now()
+        except Exception:
+            pass
 
-    app._daemon = WindowZonesDaemon()
+    cfg_watch_timer = QTimer(app)
+    cfg_watch_timer.timeout.connect(reload_runtime_config)
+    cfg_watch_timer.start(1000)
+
+    # Local IPC Server so the Control Panel can invoke Hub / Reload directly on the daemon
+    ipc_server = QLocalServer(app)
+    QLocalServer.removeServer(DAEMON_IPC_NAME)
+    ipc_server.listen(DAEMON_IPC_NAME)
+
+    def handle_ipc_connection():
+        client = ipc_server.nextPendingConnection()
+        if not client:
+            return
+        if client.waitForReadyRead(400):
+            cmd = client.readAll().data().decode("utf-8", errors="ignore").strip().upper()
+            if cmd == "OPEN_HUB":
+                hub_window.show_hub()
+            elif cmd == "TOGGLE_HUB":
+                hub_window.toggle_hub()
+            elif cmd == "RELOAD_CONFIG":
+                reload_runtime_config(force=True)
+            elif cmd == "APPLY_LAYOUT":
+                apply_layout_statically()
+        client.disconnectFromServer()
+
+    ipc_server.newConnection.connect(handle_ipc_connection)
+
+    app._daemon = daemon_obj
+    app._hub_engine = hub_engine
+    app._hub_window = hub_window
+    app._tabs_manager = tabs_manager
+    app._cfg_watch_timer = cfg_watch_timer
+    app._ipc_server = ipc_server
+    app._mutex = mutex
+
+    app.aboutToQuit.connect(unregister_all_hotkeys)
+    app.aboutToQuit.connect(ipc_server.close)
 
     # System Tray Integration
     icon_path = os.path.join(APP_DIR, "windowzones_icon.ico")
@@ -374,13 +535,17 @@ def run_daemon():
     else:
         tray_icon.setIcon(app.style().standardIcon(QStyle.StandardPixmap.SP_DesktopIcon))
 
-    tray_icon.setToolTip("WindowZones - Window Manager (Running in Background)")
+    tray_icon.setToolTip("WindowZones - Window Manager & VS Code Hub (Running in Background)")
 
     menu = QMenu()
 
     action_settings = QAction("Open Settings", menu)
     action_settings.triggered.connect(launch_gui)
     menu.addAction(action_settings)
+
+    action_hub = QAction("Open VS Code Hub", menu)
+    action_hub.triggered.connect(hub_window.show_hub)
+    menu.addAction(action_hub)
 
     action_apply = QAction("Apply Layout", menu)
     action_apply.triggered.connect(apply_layout_statically)
@@ -417,7 +582,12 @@ def run_daemon():
     # Display balloon notification to confirm active background state
     tray_icon.showMessage(
         "WindowZones Active",
-        f"Running silently in background.\nPress {format_hotkey_display(open_gui_str)} for settings or {format_hotkey_display(apply_layout_str)} to apply layout.",
+        (
+            f"Running silently in background.\n"
+            f"Settings: {format_hotkey_display(open_gui_str)} | "
+            f"Layout: {format_hotkey_display(apply_layout_str)} | "
+            f"VS Code Hub: {format_hotkey_display(open_hub_str)}"
+        ),
         QSystemTrayIcon.MessageIcon.Information,
         2500
     )
@@ -430,6 +600,7 @@ def run_daemon():
     print(f" 1. Press '{format_hotkey_display(open_gui_str)}' or click the tray icon to open Settings.", flush=True)
     print(f" 2. Press '{format_hotkey_display(apply_layout_str)}' to instantly apply the current layout.", flush=True)
     print(f" 3. Hold '{snap_mod_str}' while dragging any window to reveal your zones and snap it.", flush=True)
+    print(f" 4. Press '{format_hotkey_display(open_hub_str)}' to open the integrated VS Code Hub.", flush=True)
     print("-------------------------------------------------------------\n", flush=True)
 
     sys.exit(app.exec())

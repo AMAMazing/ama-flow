@@ -238,6 +238,58 @@ def get_window_margins(hwnd):
         pass
     return 0, 0, 0, 0
 
+def get_window_visual_rect(hwnd):
+    """
+    Returns {'x': left, 'y': top, 'width': w, 'height': h} of the visual DWM frame
+    in physical pixels, or None if unavailable.
+    """
+    if not hwnd:
+        return None
+    try:
+        fr = RECT()
+        if ctypes.windll.dwmapi.DwmGetWindowAttribute(hwnd, 9, ctypes.byref(fr), ctypes.sizeof(fr)) == 0:
+            w = fr.right - fr.left
+            h = fr.bottom - fr.top
+            if w > 0 and h > 0:
+                return {"x": fr.left, "y": fr.top, "width": w, "height": h}
+    except Exception:
+        pass
+    try:
+        wr = win32gui.GetWindowRect(hwnd)
+        w = wr[2] - wr[0]
+        h = wr[3] - wr[1]
+        if w > 0 and h > 0:
+            return {"x": wr[0], "y": wr[1], "width": w, "height": h}
+    except Exception:
+        pass
+    return None
+
+def is_window_minimized(hwnd):
+    try:
+        return bool(ctypes.windll.user32.IsIconic(int(hwnd)))
+    except Exception:
+        return False
+
+def is_window_maximized(hwnd):
+    try:
+        return bool(ctypes.windll.user32.IsZoomed(int(hwnd)))
+    except Exception:
+        return False
+
+def get_foreground_hwnd():
+    try:
+        return int(ctypes.windll.user32.GetForegroundWindow())
+    except Exception:
+        return 0
+
+def get_window_pid(hwnd):
+    try:
+        pid = wintypes.DWORD(0)
+        ctypes.windll.user32.GetWindowThreadProcessId(int(hwnd), ctypes.byref(pid))
+        return int(pid.value)
+    except Exception:
+        return 0
+
 def is_alt_tab_window(hwnd):
     if not win32gui.IsWindowVisible(hwnd):
         return False
@@ -283,6 +335,122 @@ def is_alt_tab_window(hwnd):
         return False
 
     return True
+
+def is_vscode_window_hwnd(hwnd):
+    if not hwnd:
+        return False
+    try:
+        if not win32gui.IsWindow(hwnd) or not win32gui.IsWindowVisible(hwnd):
+            return False
+        if get_window_pid(hwnd) == os.getpid():
+            return False
+        cls_name = win32gui.GetClassName(hwnd)
+        if cls_name != "Chrome_WidgetWin_1":
+            return False
+        title = win32gui.GetWindowText(hwnd).strip()
+        if not title:
+            return False
+        t_low = title.lower()
+        is_code_title = (
+            t_low == "visual studio code"
+            or t_low.endswith(" - visual studio code")
+            or t_low.endswith(" - visual studio code - insiders")
+            or t_low == "vscodium"
+            or t_low.endswith(" - vscodium")
+        )
+        if not is_code_title:
+            return False
+
+        cloaked = ctypes.c_int(0)
+        try:
+            if ctypes.windll.dwmapi.DwmGetWindowAttribute(hwnd, 14, ctypes.byref(cloaked), ctypes.sizeof(cloaked)) == 0:
+                if cloaked.value != 0:
+                    return False
+        except Exception:
+            pass
+
+        ex_style = win32gui.GetWindowLong(hwnd, win32con.GWL_EXSTYLE)
+        if (ex_style & win32con.WS_EX_TOOLWINDOW) and not (ex_style & win32con.WS_EX_APPWINDOW):
+            return False
+        owner = win32gui.GetWindow(hwnd, win32con.GW_OWNER)
+        if owner and not (ex_style & win32con.WS_EX_APPWINDOW):
+            return False
+        return True
+    except Exception:
+        return False
+
+def get_open_vscode_windows():
+    """
+    Enumerates all visible top-level VS Code windows in Z-order (front-most first).
+    Returns a list of dicts with hwnd, title, is_minimized, is_maximized, and visual rect.
+    """
+    results = []
+    def callback(hwnd, _):
+        if is_vscode_window_hwnd(hwnd):
+            title = win32gui.GetWindowText(hwnd).strip()
+            results.append({
+                "hwnd": int(hwnd),
+                "title": title,
+                "is_minimized": is_window_minimized(hwnd),
+                "is_maximized": is_window_maximized(hwnd),
+                "rect": get_window_visual_rect(hwnd),
+            })
+        return True
+    try:
+        win32gui.EnumWindows(callback, None)
+    except Exception:
+        pass
+    return results
+
+def activate_window(hwnd):
+    """
+    Reliably restores (if minimized) and brings a target window to the foreground.
+    """
+    if not hwnd:
+        return False
+    try:
+        hwnd = int(hwnd)
+        if not win32gui.IsWindow(hwnd):
+            return False
+        user32 = ctypes.windll.user32
+        if user32.IsIconic(hwnd):
+            win32gui.ShowWindow(hwnd, win32con.SW_RESTORE)
+
+        fg_hwnd = user32.GetForegroundWindow()
+        cur_tid = ctypes.windll.kernel32.GetCurrentThreadId()
+        fg_tid = user32.GetWindowThreadProcessId(fg_hwnd, None) if fg_hwnd else 0
+        tgt_tid = user32.GetWindowThreadProcessId(hwnd, None)
+
+        attached_fg = False
+        attached_tgt = False
+        try:
+            if fg_tid and fg_tid != cur_tid:
+                attached_fg = bool(user32.AttachThreadInput(cur_tid, fg_tid, True))
+            if tgt_tid and tgt_tid != cur_tid:
+                attached_tgt = bool(user32.AttachThreadInput(cur_tid, tgt_tid, True))
+            user32.BringWindowToTop(hwnd)
+            user32.SetForegroundWindow(hwnd)
+        finally:
+            if attached_tgt:
+                user32.AttachThreadInput(cur_tid, tgt_tid, False)
+            if attached_fg:
+                user32.AttachThreadInput(cur_tid, fg_tid, False)
+        return True
+    except Exception:
+        try:
+            win32gui.SetForegroundWindow(int(hwnd))
+            return True
+        except Exception:
+            return False
+
+def close_window(hwnd):
+    if not hwnd:
+        return False
+    try:
+        win32gui.PostMessage(int(hwnd), win32con.WM_CLOSE, 0, 0)
+        return True
+    except Exception:
+        return False
 
 def get_open_windows():
     windows = []
@@ -370,7 +538,7 @@ def find_window_by_title(title_substring, exact=False):
         pass
     return hwnds[0] if hwnds else None
 
-def position_window(hwnd, rect):
+def position_window(hwnd, rect, no_activate=False):
     try:
         placement = win32gui.GetWindowPlacement(hwnd)
         if placement[1] == win32con.SW_SHOWMINIMIZED:
@@ -390,10 +558,13 @@ def position_window(hwnd, rect):
         w = tw + pad_left + pad_right
         h = th + pad_top + pad_bottom
 
+        flags = (win32con.SWP_NOZORDER | win32con.SWP_NOACTIVATE) if no_activate else 0
+        z_after = 0 if no_activate else win32con.HWND_TOP
+
         win32gui.SetWindowPos(
-            hwnd, win32con.HWND_TOP,
+            hwnd, z_after,
             x, y, w, h,
-            0
+            flags
         )
 
         # Second pass: verify actual DWM visual frame after any WM_DPICHANGED or unmaximize reflow

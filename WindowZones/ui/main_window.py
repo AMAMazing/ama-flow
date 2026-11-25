@@ -11,6 +11,7 @@ try:
     from ui.overlay import FullscreenPreviewOverlay
     from ui.aspect_ratio_manager import AspectRatioRow, AddAspectRatioDialog
     from ui.dialogs import SettingsDialog
+    from ui.vscode_hub import VSCodeHubWindow
     from core.config import (
         CONFIG_PATH,
         MAIN_SCRIPT,
@@ -22,6 +23,7 @@ try:
         DEFAULT_KEYBINDINGS,
         load_config,
         save_config,
+        format_hotkey_display,
     )
     from core.layout_engine import (
         calculate_smart_layout,
@@ -34,6 +36,7 @@ except (ImportError, ValueError):
     from .overlay import FullscreenPreviewOverlay
     from .aspect_ratio_manager import AspectRatioRow, AddAspectRatioDialog
     from .dialogs import SettingsDialog
+    from .vscode_hub import VSCodeHubWindow
     from ..core.config import (
         CONFIG_PATH,
         MAIN_SCRIPT,
@@ -45,6 +48,7 @@ except (ImportError, ValueError):
         DEFAULT_KEYBINDINGS,
         load_config,
         save_config,
+        format_hotkey_display,
     )
     from ..core.layout_engine import (
         calculate_smart_layout,
@@ -54,12 +58,20 @@ except (ImportError, ValueError):
     from ..core.win_utils import get_open_windows
 
 
+def _send_daemon_command(command: str) -> bool:
+    try:
+        from daemon.service import send_daemon_command
+    except (ImportError, ValueError):
+        from ..daemon.service import send_daemon_command
+    return send_daemon_command(command)
+
+
 class MainWindow(QMainWindow):
     def __init__(self):
         super().__init__()
         self.setWindowTitle("WindowZones")
-        self.resize(760, 620)
-        self.setMinimumSize(680, 520)
+        self.resize(760, 660)
+        self.setMinimumSize(680, 560)
         self.setStyleSheet(STYLESHEET)
 
         # Stay on top of the fullscreen desktop overlay so the GUI is always accessible
@@ -72,6 +84,7 @@ class MainWindow(QMainWindow):
         self.corner_settings = dict(DEFAULT_CORNER_SETTINGS)
         self.app_titles_3win = dict(DEFAULT_APP_TITLES_3WIN)
         self.keybindings = dict(DEFAULT_KEYBINDINGS)
+        self._local_hub_window = None
 
         # Fullscreen live preview overlay displayed on desktop behind GUI (like holding Ctrl)
         self.overlay_preview = FullscreenPreviewOverlay()
@@ -112,6 +125,11 @@ class MainWindow(QMainWindow):
         self.display_label.setStyleSheet("color: #636366; font-size: 11px; font-weight: 600;")
         header.addWidget(self.display_label)
 
+        self.btn_vscode_hub = QPushButton("VS Code Hub")
+        self.btn_vscode_hub.setObjectName("secondary_action")
+        self.btn_vscode_hub.clicked.connect(self.open_vscode_hub)
+        header.addWidget(self.btn_vscode_hub)
+
         self.btn_settings = QPushButton("Preferences")
         self.btn_settings.setObjectName("secondary_action")
         self.btn_settings.clicked.connect(self.open_settings)
@@ -143,7 +161,7 @@ class MainWindow(QMainWindow):
 
         main_layout.addWidget(self.status_card)
 
-        # 3. Workspace Controls Card (3 SEPARATE LINES - NEVER SHARED)
+        # 3. Workspace Controls Card (4 SEPARATE LINES - NEVER SHARED)
         pref_card = QFrame()
         pref_card.setObjectName("card")
         pref_layout = QVBoxLayout(pref_card)
@@ -220,6 +238,27 @@ class MainWindow(QMainWindow):
 
         pref_layout.addLayout(line3)
 
+        # Line 4: VS Code Tabs (Auto / Enabled / Disabled)
+        line4 = QHBoxLayout()
+        lbl_tabs = QLabel("VS Code Tabs")
+        lbl_tabs.setObjectName("card_title")
+        lbl_tabs.setToolTip(
+            "Auto activates VS Code tabs as soon as 2+ VS Code windows are open."
+        )
+        line4.addWidget(lbl_tabs)
+        line4.addStretch()
+
+        self.vscode_tabs_btns = {}
+        for mode_name in ["Auto", "Enabled", "Disabled"]:
+            btn = QPushButton(mode_name)
+            btn.setProperty("class", "segment_btn")
+            btn.setCheckable(True)
+            btn.clicked.connect(lambda checked, m=mode_name: self.set_vscode_tabs_mode(m))
+            self.vscode_tabs_btns[mode_name] = btn
+            line4.addWidget(btn)
+
+        pref_layout.addLayout(line4)
+
         main_layout.addWidget(pref_card)
 
         # 4. Aspect Ratio Categories Card
@@ -295,6 +334,34 @@ class MainWindow(QMainWindow):
         self.save_to_disk()
         self.update_dimensions_display()
 
+    def set_vscode_tabs_mode(self, mode):
+        if mode not in ("Auto", "Enabled", "Disabled"):
+            mode = "Auto"
+        self.layout_settings["vscode_tabs_mode"] = mode
+        for name, btn in self.vscode_tabs_btns.items():
+            btn.setChecked(name == mode)
+        self.save_to_disk()
+
+    def open_vscode_hub(self):
+        # Prefer opening the shared daemon Hub window so it shares one persistent instance
+        if _send_daemon_command("OPEN_HUB"):
+            return
+        if self._local_hub_window is None:
+            self._local_hub_window = VSCodeHubWindow()
+        self._local_hub_window.show_hub()
+
+    def _update_footer_tip(self):
+        snap_key = self.keybindings.get("snap_modifier", "Ctrl")
+        hub_key = format_hotkey_display(
+            self.keybindings.get("open_vscode_hub", DEFAULT_KEYBINDINGS["open_vscode_hub"])
+        )
+        if hub_key:
+            self.tip_label.setText(
+                f"Hold {snap_key} while dragging to snap  ·  {hub_key} opens VS Code Hub"
+            )
+        else:
+            self.tip_label.setText(f"Hold {snap_key} while dragging any window to snap.")
+
     def on_periodic_refresh(self):
         self.update_detection_status()
         self.update_dimensions_display()
@@ -315,19 +382,24 @@ class MainWindow(QMainWindow):
 
         # Detect Primary
         for cand in primary_candidates:
-            if primary_hwnd: break
+            if primary_hwnd:
+                break
             for t, h in open_wins:
-                if detected_hwnd and h == detected_hwnd: continue
+                if detected_hwnd and h == detected_hwnd:
+                    continue
                 if cand in t.lower():
                     primary_hwnd = h
                     break
-        
+
         # Detect Secondary
         for cand in secondary_candidates:
-            if secondary_hwnd: break
+            if secondary_hwnd:
+                break
             for t, h in open_wins:
-                if detected_hwnd and h == detected_hwnd: continue
-                if primary_hwnd and h == primary_hwnd: continue
+                if detected_hwnd and h == detected_hwnd:
+                    continue
+                if primary_hwnd and h == primary_hwnd:
+                    continue
                 if cand in t.lower():
                     secondary_hwnd = h
                     break
@@ -456,8 +528,7 @@ class MainWindow(QMainWindow):
         dlg = SettingsDialog(self)
         if dlg.exec():
             self.keybindings = dlg.get_keybindings()
-            snap_key = self.keybindings.get("snap_modifier", "Ctrl")
-            self.tip_label.setText(f"Hold {snap_key} while dragging any window to snap.")
+            self._update_footer_tip()
             self.save_to_disk()
 
     def showEvent(self, event):
@@ -502,9 +573,13 @@ class MainWindow(QMainWindow):
         for name, btn in self.corner_btns.items():
             btn.setChecked(name == crn_pos)
 
-        snap_key = self.keybindings.get("snap_modifier", "Ctrl")
-        self.tip_label.setText(f"Hold {snap_key} while dragging any window to snap.")
+        tabs_mode = self.layout_settings.get("vscode_tabs_mode", "Auto")
+        if tabs_mode not in ("Auto", "Enabled", "Disabled"):
+            tabs_mode = "Auto"
+        for name, btn in self.vscode_tabs_btns.items():
+            btn.setChecked(name == tabs_mode)
 
+        self._update_footer_tip()
         self.render_profiles_list()
         self.update_detection_status()
         self.update_dimensions_display()
@@ -548,10 +623,22 @@ class MainWindow(QMainWindow):
     def closeEvent(self, event):
         if getattr(self, "overlay_preview", None):
             self.overlay_preview.close()
+        if getattr(self, "_local_hub_window", None):
+            self._local_hub_window.hide()
+            self._local_hub_window.deleteLater()
         super().closeEvent(event)
 
     def save_to_disk(self):
         zones_with_rects = self._get_current_zones_with_rects()
+        # Preserve dropdown view preference if updated externally from the tab bar '+' dropdown
+        try:
+            latest = load_config(CONFIG_PATH)
+            dd_view = latest.get("layout_settings", {}).get("vscode_tabs_dropdown_view")
+            if dd_view in ("grid", "list"):
+                self.layout_settings["vscode_tabs_dropdown_view"] = dd_view
+        except Exception:
+            pass
+
         self.layout_settings["media_profiles"] = self.media_profiles
         self.layout_settings["chrome_sizes"] = self.chrome_sizes
         output_data = {
@@ -562,6 +649,7 @@ class MainWindow(QMainWindow):
             "zones": zones_with_rects
         }
         save_config(output_data, CONFIG_PATH)
+        _send_daemon_command("RELOAD_CONFIG")
 
     def apply_layout(self):
         self.save_to_disk()

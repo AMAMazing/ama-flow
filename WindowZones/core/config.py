@@ -5,6 +5,8 @@ APP_DIR = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
 CONFIG_PATH = os.path.join(APP_DIR, "config.json")
 MAIN_SCRIPT = os.path.join(APP_DIR, "main.py")
 GUI_SCRIPT = os.path.join(APP_DIR, "gui.py")
+VSCODE_HUB_CACHE_PATH = os.path.join(APP_DIR, "vscode_hub_cache.json")
+VSCODE_HUB_CONFIG_PATH = os.path.join(APP_DIR, "vscode_hub_config.json")
 
 DEFAULT_CHROME_SIZES = {
     "Equal Size": "equal",
@@ -43,6 +45,8 @@ DEFAULT_LAYOUT_SETTINGS = {
     "primary_side": "Right",
     "secondary_sizing": "432px",
     "active_media_profile": "Auto (Smart Detect)",
+    "vscode_tabs_mode": "Auto",
+    "vscode_tabs_dropdown_view": "grid",
     "chrome_sizes": DEFAULT_CHROME_SIZES,
     "media_profiles": DEFAULT_MEDIA_PROFILES
 }
@@ -65,7 +69,8 @@ DEFAULT_APP_TITLES_3WIN = {
 DEFAULT_KEYBINDINGS = {
     "open_gui": "Ctrl+Win+Z",
     "snap_modifier": "Ctrl",
-    "apply_layout": "Win+Shift+Z"
+    "apply_layout": "Win+Shift+Z",
+    "open_vscode_hub": "Win+Shift+A"
 }
 
 def parse_hotkey(hotkey_str):
@@ -174,34 +179,37 @@ def format_hotkey_display(hotkey_str):
             normalized.append(p.upper() if len(p) <= 3 else p.capitalize())
     return " + ".join(normalized)
 
+def _build_default_config():
+    return {
+        "mode": "3_window",
+        "keybindings": dict(DEFAULT_KEYBINDINGS),
+        "layout_settings": dict(DEFAULT_LAYOUT_SETTINGS),
+        "corner_settings": dict(DEFAULT_CORNER_SETTINGS),
+        "zones": []
+    }
+
 def load_config(path=None):
     cfg_path = path or CONFIG_PATH
     if not os.path.exists(cfg_path):
-        return {
-            "mode": "3_window",
-            "keybindings": dict(DEFAULT_KEYBINDINGS),
-            "layout_settings": dict(DEFAULT_LAYOUT_SETTINGS),
-            "corner_settings": dict(DEFAULT_CORNER_SETTINGS),
-            "zones": []
-        }
+        return _build_default_config()
     try:
         with open(cfg_path, "r", encoding="utf-8") as f:
             data = json.load(f)
             if "keybindings" not in data or not isinstance(data["keybindings"], dict):
                 data["keybindings"] = dict(DEFAULT_KEYBINDINGS)
+            else:
+                for k, v in DEFAULT_KEYBINDINGS.items():
+                    data["keybindings"].setdefault(k, v)
             if "layout_settings" not in data or not isinstance(data["layout_settings"], dict):
                 data["layout_settings"] = dict(DEFAULT_LAYOUT_SETTINGS)
+            else:
+                data["layout_settings"].setdefault("vscode_tabs_mode", "Auto")
+                data["layout_settings"].setdefault("vscode_tabs_dropdown_view", "grid")
             if "corner_settings" not in data or not isinstance(data["corner_settings"], dict):
                 data["corner_settings"] = dict(DEFAULT_CORNER_SETTINGS)
             return data
     except Exception:
-        return {
-            "mode": "3_window",
-            "keybindings": dict(DEFAULT_KEYBINDINGS),
-            "layout_settings": dict(DEFAULT_LAYOUT_SETTINGS),
-            "corner_settings": dict(DEFAULT_CORNER_SETTINGS),
-            "zones": []
-        }
+        return _build_default_config()
 
 def save_config(data, path=None):
     cfg_path = path or CONFIG_PATH

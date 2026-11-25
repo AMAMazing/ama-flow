@@ -3,7 +3,8 @@
   "keybindings": {
     "open_gui": "Ctrl+Win+Z",
     "snap_modifier": "Ctrl",
-    "apply_layout": "Win+Shift+Z"
+    "apply_layout": "Win+Shift+Z",
+    "open_vscode_hub": "Win+Shift+A"
   },
   "layout_settings": {
     "app_roles": {
@@ -16,8 +17,10 @@
       ]
     },
     "primary_side": "Right",
-    "secondary_sizing": "432px",
+    "secondary_sizing": "Equal Size",
     "active_media_profile": "Auto (Smart Detect)",
+    "vscode_tabs_mode": "Auto",
+    "vscode_tabs_dropdown_view": "grid",
     "chrome_sizes": {
       "Equal Size": "equal",
       "432px": "432",
@@ -37,7 +40,8 @@
           "Netflix",
           "Disney+",
           "Paramount+",
-          "MYAEW"
+          "MYAEW",
+          "Trancy"
         ]
       },
       "Square (1:1)": {
@@ -46,10 +50,14 @@
           "YouTube Music",
           "Spotify"
         ]
+      },
+      "Trancy (16:9)": {
+        "aspect_ratio": "16:9",
+        "apps": []
       }
     },
     "vscode_side": "Right",
-    "chrome_sizing": "432px"
+    "chrome_sizing": "Equal Size"
   },
   "corner_settings": {
     "fullscreen_app": "Visual Studio Code",
@@ -74,7 +82,7 @@
       }
     },
     {
-      "window_title": "main.py - WindowZones - Visual Studio Code",
+      "window_title": "Welcome - ama-code - Visual Studio Code",
       "role": "primary",
       "pos": "Right",
       "stat": "Width (50%)",
